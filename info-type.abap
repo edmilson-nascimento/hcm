@@ -63,39 +63,3 @@ IF ( lr_proxy IS BOUND ) .
 *      WRITE:/ 'Records: ', lines( output-list_employees_result ) .
 
 ENDIF .
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
