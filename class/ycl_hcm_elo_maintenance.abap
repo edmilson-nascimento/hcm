@@ -1,0 +1,19 @@
+CLASS ycl_hcm_elo_maintenance DEFINITION
+  PUBLIC
+  INHERITING FROM ycl_hcm_elo_infotypes
+  CREATE PUBLIC .
+
+  PUBLIC SECTION.
+
+  PROTECTED SECTION.
+
+  PRIVATE SECTION.
+
+ENDCLASS.
+
+
+
+CLASS ycl_hcm_elo_maintenance IMPLEMENTATION.
+
+
+ENDCLASS.
