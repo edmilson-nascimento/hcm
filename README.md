@@ -1,5 +1,5 @@
 # Routines HCM modules
-HCM data maintenance
+HCM data maintenance (infotypes)
 
 Essa solução ira seguir o modelo de arquitetura proposto por ~Ogrão~ [Leandro Figueiro](https://www.linkedin.com/in/leandro-figueiredo-09560113/) usando interface e classe (final e abstrata). Serão tratados diferentes infotypes mas usando uma mesma modelagem.
 
