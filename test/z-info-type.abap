@@ -27,7 +27,6 @@ IF ( return-type = if_xo_const_message=>error ) .
   RETURN .
 ENDIF .
 
-
 record = value P2001(
     PERNR = number
     INFTY = infty
