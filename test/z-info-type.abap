@@ -23,7 +23,6 @@ CALL FUNCTION 'BAPI_EMPLOYEE_ENQUEUE'
     number = number
   IMPORTING
     return = return.
-
 IF ( return-type = if_xo_const_message=>error ) .
   RETURN .
 ENDIF .
