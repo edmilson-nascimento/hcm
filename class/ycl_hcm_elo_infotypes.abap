@@ -72,6 +72,63 @@ CLASS ycl_hcm_elo_infotypes IMPLEMENTATION.
       RETURN .
     ENDIF .
 
+    DATA(record) = data .
+
+*COP Copiar
+*DEL Eliminar
+*DIS Exibir
+*EDQ Bloquear/desbloquear
+*INS Criar
+*LIS9  Delimitar
+*MOD Modificar
+*INSS  Criar c/medidas não há redifinição p/modificar
+
+    DATA:
+      operation TYPE actio VALUE `INS`, " Criar
+      infty     TYPE infty VALUE '2001', " Ausências
+      subtype   TYPE subty VALUE '1004', " Doença (consulta médica)
+
+      return    TYPE bapireturn1,
+      key       TYPE bapipakey.
+
+    CALL FUNCTION 'BAPI_EMPLOYEE_ENQUEUE'
+      EXPORTING
+        number = record-pernr
+      IMPORTING
+        return = return.
+    IF ( return-type = if_xo_const_message=>error ) .
+      RETURN .
+    ENDIF .
+
+
+    CLEAR return .
+
+    CALL FUNCTION 'HR_INFOTYPE_OPERATION'
+      EXPORTING
+        infty     = infty
+        number    = record-pernr
+        subtype   = subtype
+        record    = record
+        operation = operation
+      IMPORTING
+        return    = return
+        key       = key.
+
+    IF ( return-type = if_xo_const_message=>error ) .
+      RETURN .
+    ENDIF .
+
+
+    CALL FUNCTION 'BAPI_TRANSACTION_COMMIT' .
+
+    CLEAR return .
+
+    CALL FUNCTION 'BAPI_EMPLOYEE_DEQUEUE'
+      EXPORTING
+        number = record-pernr
+      IMPORTING
+        return = return.
+
   ENDMETHOD.
 
 
