@@ -8,7 +8,15 @@ CLASS ycl_hcm_elo_exportation DEFINITION
     CONSTANTS:
       BEGIN OF interfaces,
         set_regist_employee TYPE zwsuser-company_code VALUE 'RegistEmployee',
-      END OF interfaces .
+      END OF interfaces,
+
+      BEGIN OF inftyp,
+        p0000 TYPE infty VALUE '0000',
+        p0001 TYPE infty VALUE '0001',
+        p0002 TYPE infty VALUE '0002',
+        p0105 TYPE infty VALUE '0105',
+        p0337 TYPE infty VALUE '0337',
+      END OF inftyp .
 
     "! <p class="shorttext synchronized" lang="pt">Construtor</p>
     METHODS constructor
@@ -45,12 +53,33 @@ CLASS ycl_hcm_elo_exportation DEFINITION
     "! <p class="shorttext synchronized" lang="pt">Retorna dados de Employee</p>
     METHODS get_employee
       RETURNING VALUE(result) TYPE zemployee .
-    "! <p class="shorttext synchronized" lang="pt">Retorna dados de Employee para serem exportados</p>
-    METHODS get_employee_detail
+    "! <p class="shorttext synchronized" lang="pt">Retorna dados de Employee p/ export(inftype 0000)</p>
+    METHODS get_detail_0000
+      RETURNING VALUE(result) TYPE p0000 .
+    "! <p class="shorttext synchronized" lang="pt">Retorna dados de Employee p/ export(inftype 0001)</p>
+    METHODS get_detail_0001
       RETURNING VALUE(result) TYPE p0001 .
+    "! <p class="shorttext synchronized" lang="pt">Retorna dados de Employee p/ export(inftype 0002)</p>
+    METHODS get_detail_0002
+      RETURNING VALUE(result) TYPE p0002 .
+    "! <p class="shorttext synchronized" lang="pt">Retorna dados de Employee p/ export(inftype 0105)</p>
+    METHODS get_detail_0105
+      RETURNING VALUE(result) TYPE p0105 .
+    "! <p class="shorttext synchronized" lang="pt">Retorna dados de Employee p/ export(inftype 0337)</p>
+    METHODS get_detail_0337
+      RETURNING VALUE(result) TYPE p0337 .
     "! <p class="shorttext synchronized" lang="pt">Retorna dados de acesso (user,pass and etc)</p>
     METHODS get_user_access
       RETURNING VALUE(result) TYPE zwsuser .
+    "! <p class="shorttext synchronized" lang="pt">Retorna a datetime convertido</p>
+    METHODS map_to_datetime
+      IMPORTING
+        !data         TYPE d
+      RETURNING
+        VALUE(result) TYPE xsddatetime_z .
+    "! <p class="shorttext synchronized" lang="pt">Retorna a foto do colaborar (formato RAW)</p>
+    METHODS get_photo
+      RETURNING VALUE(result) TYPE xstring .
 
 
 ENDCLASS.
@@ -109,13 +138,25 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
         RETURN .
     ENDTRY .
 
-    IF ( output-regist_employee_result-base-operation_success EQ lc_true ) .
-      result = VALUE #( BASE me->messages (
-        LINES OF ycl_hcm_application_log=>map_excep_to_bapiret2(
-          type = if_xo_const_message=>success
-          message = |{ output-regist_employee_result-base-operation_result_description
-                     } - { me->employee ALPHA = OUT }| ) ) ) .
-    ENDIF .
+    CASE output-regist_employee_result-base-operation_success .
+
+      WHEN lc_true .
+        result = VALUE #( BASE me->messages (
+          LINES OF ycl_hcm_application_log=>map_excep_to_bapiret2(
+            type = if_xo_const_message=>success
+            message = |{ output-regist_employee_result-base-operation_result_description
+                       } - { me->employee ALPHA = OUT }| ) ) ) .
+
+      WHEN '-1' .
+        result = VALUE #( BASE me->messages (
+          LINES OF ycl_hcm_application_log=>map_excep_to_bapiret2(
+            type = if_xo_const_message=>error
+            message = |{ output-regist_employee_result-base-operation_result_description
+                       } - { me->employee ALPHA = OUT }| ) ) ) .
+
+      WHEN OTHERS .
+
+    ENDCASE .
 
   ENDMETHOD .
 
@@ -161,25 +202,45 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
     CONSTANTS:
       company_code TYPE zemployee_filtering_criteria-company_code VALUE 'DESCONTAO'.
 
-    DATA(list_sap) = me->get_employee_detail( ) .
-    IF ( list_sap IS INITIAL ) .
+    DATA(infotype_0000) = me->get_detail_0000( ) .
+    IF ( infotype_0000 IS INITIAL ) .
       RETURN .
     ENDIF .
 
+    DATA(infotype_0001) = me->get_detail_0001( ) .
+    DATA(infotype_0002) = me->get_detail_0002( ) .
+    DATA(infotype_0105) = me->get_detail_0105( ) .
+    DATA(infotype_0337) = me->get_detail_0337( ) .
+
     result = VALUE zemployee(
-      abbreviated_name    = list_sap-sname
-      active              = abap_true
-      company_code        = company_code
-      employee_code       = |{ list_sap-pernr ALPHA = OUT }|
-      end_date            = list_sap-endda
-      name                = list_sap-ename
-      start_date          = list_sap-begda
+      employee_code              = |{ infotype_0001-pernr ALPHA = OUT }|
+      name                       = infotype_0002-cname
+      professional_category_code = infotype_0337-prcat
+      cost_central_code          = infotype_0001-kostl
+      additional_code1           = infotype_0001-orgeh
+      start_date                 = infotype_0001-begda
+      end_date                   = infotype_0001-endda
+      email                      = infotype_0105-usrid_long
+      birth_date                 = me->map_to_datetime( infotype_0002-gbdat )
+      photo                      = me->get_photo( )
+      gender                     = ''
     ).
 
   ENDMETHOD .
 
 
-  METHOD get_employee_detail .
+  METHOD get_detail_0000 .
+
+    IF ( employee IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    result = NEW ycl_hcm_elo_maintenance( )->read_0000( employee ) .
+
+  ENDMETHOD .
+
+
+  METHOD get_detail_0001 .
 
     IF ( employee IS INITIAL ) .
       RETURN .
@@ -190,22 +251,143 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
   ENDMETHOD .
 
 
+  METHOD get_detail_0002 .
+
+    IF ( employee IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    result = NEW ycl_hcm_elo_maintenance( )->read_0002( employee ) .
+
+  ENDMETHOD .
+
+
+  METHOD get_detail_0105 .
+
+    IF ( employee IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    result = NEW ycl_hcm_elo_maintenance( )->read_0105( employee ) .
+
+  ENDMETHOD .
+
+
+  METHOD get_detail_0337 .
+
+    IF ( employee IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    result = NEW ycl_hcm_elo_maintenance( )->read_0337( employee ) .
+
+  ENDMETHOD .
+
+
   METHOD get_user_access .
 
-    CONSTANTS:
-      BEGIN OF user,
-        company_code    TYPE zwsuser-company_code VALUE 'DESCONTAO',
-        hashed_password TYPE zwsuser-hashed_password VALUE '',
-        password        TYPE zwsuser-password VALUE '1234',
-        user_code       TYPE zwsuser-user_code VALUE 'sapuser',
-      END OF user .
+    result =
+      NEW ycl_hcm_elo_maintenance( )->yif_hcm_elo_data_maintenance~get_user_access( ) .
 
-    result = VALUE zwsuser(
-      company_code    = user-company_code
-      hashed_password = user-hashed_password
-      password        = user-password
-      user_code       = user-user_code
-    ).
+  ENDMETHOD .
+
+
+  METHOD get_photo .
+
+    DATA:
+      exists       TYPE char1,
+      connect_info TYPE toav0,
+
+      length       TYPE int4,
+      message      TYPE bapiret2,
+      document     TYPE STANDARD TABLE OF tbl1024,
+
+      buffer       TYPE xstring.
+
+    IF ( me->employee IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    CALL FUNCTION 'HR_IMAGE_EXISTS'
+      EXPORTING
+        p_pernr               = me->employee
+*       p_tclas               = 'A'
+*       p_begda               = '18000101'
+*       p_endda               = '99991231'
+      IMPORTING
+        p_exists              = exists
+        p_connect_info        = connect_info
+      EXCEPTIONS
+        error_connectiontable = 1
+        OTHERS                = 2.
+    IF ( sy-subrc NE 0 ) .
+      RETURN .
+    ENDIF.
+
+    CALL FUNCTION 'ALINK_RFC_TABLE_GET'
+      EXPORTING
+        im_docid    = connect_info-arc_doc_id
+        im_crepid   = connect_info-archiv_id
+*       im_compid   =
+      IMPORTING
+        ex_length   = length
+        ex_message  = message
+      TABLES
+        ex_document = document.
+
+    IF ( lines( document ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    " Retorna vazio caso nao tenha autorizacao
+    IF ( length IS INITIAL ) .
+      length = 1024 * lines( document ) .
+    ENDIF .
+
+    CALL FUNCTION 'SCMS_BINARY_TO_XSTRING'
+      EXPORTING
+        input_length = length
+*       first_line   = 0
+*       last_line    = 0
+      IMPORTING
+        buffer       = buffer
+      TABLES
+        binary_tab   = document
+      EXCEPTIONS
+        failed       = 1
+        OTHERS       = 2.
+    IF ( sy-subrc NE 0 ) .
+      RETURN .
+    ENDIF.
+
+    result = buffer .
+
+  ENDMETHOD .
+
+
+  METHOD map_to_datetime .
+
+    DATA:
+      local_date TYPE string .
+
+    IF ( data IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    TRY .
+        cl_bs_soa_convert_xsddatetime=>map_xsddatetime_z_out(
+          EXPORTING
+            iv_date         = data
+            iv_time         = '000000'
+*           iv_timestamp    =
+            iv_timezone     = space
+          IMPORTING
+            ev_xsd_datetime = result
+        ) .
+
+      CATCH cx_bs_soa_exception .
+
+    ENDTRY .
 
   ENDMETHOD .
 
