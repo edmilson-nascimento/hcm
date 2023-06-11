@@ -13,8 +13,8 @@ CLASS ycl_hcm_elo_importation DEFINITION
     "! <p class="shorttext synchronized" lang="pt">Testa se interface esta ativa e com as corretas config</p>
     CLASS-METHODS test_interface
       IMPORTING
-        !start        TYPE d
-        !end          TYPE d
+        !start        TYPE d DEFAULT '01012022'
+        !end          TYPE d DEFAULT '01012024'
       RETURNING
         VALUE(result) TYPE bapiret2-message .
 
@@ -42,10 +42,16 @@ CLASS ycl_hcm_elo_importation DEFINITION
         no_record             TYPE bapiret2-number VALUE 011,
         "! <p class="shorttext synchronized" lang="pt">Registro do funcionario & inválido.</p>
         invalid_employee      TYPE bapiret2-number VALUE 016,
+        "! <p class="shorttext synchronized" lang="pt">Registro & inválido para rubricas/subtypes.</p>
+        invalid_subtype       TYPE bapiret2-number VALUE 021,
         "! <p class="shorttext synchronized" lang="pt">& & & &</p>
         general               TYPE bapiret2-number VALUE 000,
-        "! <p class="shorttext synchronized" lang="pt">Não existe Tipo de Segmento valido para filtro. Favor verificar.</p>
+        "! <p class="shorttext synchronized" lang="pt">Não existe Tipo de Segmento valido para filtro. Favor ve...</p>
         segment_type          TYPE bapiret2-number VALUE 017,
+        "! <p class="shorttext synchronized" lang="pt">Erro ao salvar dados importados da Inteface.</p>
+        save_error            TYPE bapiret2-number VALUE 022,
+        "! <p class="shorttext synchronized" lang="pt">Dados importados da Inteface salvos com sucesso.</p>
+        save_success          TYPE bapiret2-number VALUE 023,
       END OF message,
       company_code TYPE zemployee_filtering_criteria-company_code VALUE 'DESCONTAO'.
 
@@ -109,21 +115,27 @@ CLASS ycl_hcm_elo_importation DEFINITION
     "! <p class="shorttext synchronized" lang="pt">Prepara os dados p/ persistência (ins, upd)</p>
     METHODS prepare_data .
     "! <p class="shorttext synchronized" lang="pt">Persiste os dados importados da interface</p>
-    METHODS save_imported .
+    METHODS save_imported
+      RETURNING
+        VALUE(result) TYPE bapiret2_t.
     "! <p class="shorttext synchronized" lang="pt">Processar os dados importados da interface</p>
-    METHODS mainten_imported .
+    METHODS mainten_imported
+      RETURNING
+        VALUE(result) TYPE bapiret2_t.
     "! <p class="shorttext synchronized" lang="pt">Coleta mensagem de log</p>
     METHODS set_log
       IMPORTING
         !type   TYPE bapiret2-type DEFAULT 'S'
         !number TYPE bapiret2-number
         !m1     TYPE bapiret2-message_v1 OPTIONAL .
-
     "! <p class="shorttext synchronized" lang="pt">Valida se o funcionário existe no SAP</p>
     METHODS is_valid_employees_code
       CHANGING
         !data TYPE zsalary_time_tab .
-
+    "! <p class="shorttext synchronized" lang="pt">Valida se rubricas/subtypes existem no SAP</p>
+    METHODS is_valid_subtypes
+      CHANGING
+        !data TYPE zsalary_time_tab .
     "! <p class="shorttext synchronized" lang="pt">Valida se o funcionário existe no SAP</p>
     METHODS prepare_by_infotype
       IMPORTING
@@ -133,129 +145,17 @@ CLASS ycl_hcm_elo_importation DEFINITION
       EXPORTING
         !ex_header   TYPE ythcm0001_t
         !ex_imported TYPE ythcm0003_t .
-
+    "! <p class="shorttext synchronized" lang="pt">Retorna o Tipo de Situação dos campos adicionais</p>
+    METHODS get_tp_situacao
+      IMPORTING
+        !data         TYPE zsalary_time
+      RETURNING
+        VALUE(result) TYPE ythcm0003-tpsituacao .
 ENDCLASS.
 
 
 
 CLASS ycl_hcm_elo_importation IMPLEMENTATION.
-
-
-  METHOD test_interface .
-
-    TYPES:
-      BEGIN OF ty_result,
-        code_in_hours   TYPE zsalary_time-code_in_hours,
-        code_type       TYPE zsalary_time-code_type,
-        duration        TYPE zsalary_time-duration,
-        employee_code   TYPE zsalary_time-employee_code,
-        end_date_time   TYPE zsalary_time-end_date_time,
-        number_of_days  TYPE zsalary_time-number_of_days,
-        salary_code     TYPE zsalary_time-salary_code,
-        start_date_time TYPE zsalary_time-start_date_time,
-      END OF ty_result,
-      tab_result TYPE STANDARD TABLE OF ty_result
-                 WITH DEFAULT KEY .
-
-    DATA:
-      obj_proxy    TYPE REF TO yelo_co_ielo_web_service,
-      logical_port TYPE  prx_logical_port_name VALUE 'YLP_IELO_WEB_SERVICE',
-      input        TYPE zielo_web_service_list_employ1.
-
-    TRY .
-        obj_proxy = NEW yelo_co_ielo_web_service(
-          logical_port_name = logical_port
-        ) .
-      CATCH cx_ai_system_fault.
-    ENDTRY .
-
-    IF ( obj_proxy IS NOT BOUND ) .
-      result = 'Erro ao criar proxy.' .
-      RETURN .
-    ENDIF.
-
-    IF ( start IS INITIAL ) .
-      RETURN .
-    ENDIF .
-
-    IF ( end IS INITIAL ) .
-      RETURN .
-    ENDIF .
-
-    CONVERT DATE start
-       INTO TIME STAMP DATA(start_date)
-       TIME ZONE space .
-
-    CONVERT DATE end
-       INTO TIME STAMP DATA(end_date)
-       TIME ZONE space .
-
-    DATA(user) = VALUE zwsuser(
-      company_code    = 'DESCONTAO'
-      hashed_password = '' " false
-      password        = '1234'
-      user_code       = 'sapuser'
-    ).
-
-    DATA(sal_filtering_criteria) = VALUE zsalary_export_criteria(
-      code_target                    = 'Any'
-      code_time_type                 = 'Any'
-      company_code                   = 'DESCONTAO'
-      end_date                       = end_date
-      export_time_format             = 'IncludeStartAndEndTimeForAllSegments'
-      group_sequential_absences      = abap_on
-      ignore_rest_days_while_groupin = abap_off
-      only_complete_day_absences     = abap_off
-      only_partial_day_absences      = abap_off
-      start_date                     = start_date
-      target_type                    = 'Any'
-    ).
-
-    DATA(sal_input) = VALUE zielo_web_service_export_sala1(
-      filtering_criteria = sal_filtering_criteria
-      user               = user
-    ).
-
-    TRY .
-        obj_proxy->export_salary_time(
-          EXPORTING
-            input  = sal_input
-          IMPORTING
-            output = DATA(output)
-        ).
-
-      CATCH cx_ai_system_fault INTO DATA(lo_error).
-        result = lo_error->errortext .
-        result = COND #( WHEN lo_error->get_longtext( ) IS INITIAL
-                         THEN lo_error->get_text( )
-                         ELSE lo_error->get_longtext( ) ) .
-        RETURN .
-    ENDTRY .
-
-    DATA(out) = VALUE tab_result(
-      FOR s IN output-salary_time_info-salary_time (
-        CORRESPONDING #( s )
-      )
-    ).
-
-*   cl_demo_output=>display_data( out ) .
-*   result = |Resultado de { lines( output-salary_time_info-salary_time ) } linhas retornadas| .
-    TRY.
-        cl_salv_table=>factory( IMPORTING r_salv_table = DATA(alv)
-                                CHANGING  t_table = out ).
-        alv->set_screen_status( pfstatus      = 'STANDARD_FULLSCREEN'
-                                report        = 'SAPLKKBL'
-                                set_functions = alv->c_functions_all ) .
-
-        DATA(lo_display) = alv->get_display_settings( ) .
-        IF ( lo_display IS BOUND ) .
-          lo_display->set_striped_pattern( cl_salv_display_settings=>true ) .
-        ENDIF .
-        alv->display( ).
-      CATCH cx_salv_msg.
-    ENDTRY.
-
-  ENDMETHOD .
 
 
   METHOD constructor .
@@ -283,6 +183,7 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
       RETURN .
     ENDIF .
 
+    " 1. Importar dados da Inteface
     TRY .
         proxy->export_salary_time( EXPORTING input  = input
                                    IMPORTING output = DATA(output) ) .
@@ -304,13 +205,77 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
     ENDIF .
 
     me->map_salary_time( CHANGING data = output-salary_time_info-salary_time ) .
+
     me->prepare_data( ) .
-    me->save_imported( ) .
-    me->mainten_imported( ) .
+
+    " 2. Salvar dados nas tabela do cliente YTHCM0001 / YTHCM0003
+    me->messages = VALUE #( BASE me->messages ( LINES OF me->save_imported( ) ) ) .
+
+    " 3. Mater infotipos salvos nas tabelas
+    me->messages = VALUE #( BASE me->messages ( LINES OF me->mainten_imported( ) ) ) .
 
     result = me->messages .
 
   ENDMETHOD .
+
+
+  METHOD get_code_types .
+
+    TYPES:
+      BEGIN OF ty_types,
+        infty TYPE infty,
+        code  TYPE zsegment_type,
+      END OF ty_types,
+      tab_types TYPE STANDARD TABLE OF ty_types
+                WITH DEFAULT KEY .
+
+    IF ( lines( me->filter-infotipos ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    DATA(code_types) = VALUE tab_types(
+      ( infty = '0014' code  = 'AIIowance' )
+      ( infty = '0015' code  = 'AIIowance' )
+      ( infty = '2001' code  = 'PaidAbsence' )
+      ( infty = '2002' code  = 'PaidWork' ) " 2002  PaidWork  C - Presenças
+      ( infty = '2001' code  = 'UnpaidAbsence' )
+      ( infty = '2010' code  = 'Overtime' ) " 2010 Overtime B-Trabalho Extraordinário
+    ).
+
+    DATA(range_infotipos) = VALUE infty_range_tab(
+      FOR r IN me->filter-infotipos (
+        sign   = if_fsbp_const_range=>sign_include
+        option = if_fsbp_const_range=>option_equal
+        low    = r
+      )
+    ) .
+
+    SORT range_infotipos ASCENDING BY low .
+
+    DATA(segment_type) = VALUE zsegment_type_tab(
+      FOR t IN code_types
+      WHERE ( infty IN range_infotipos )
+      ( t-code )
+    ).
+
+    result = VALUE zarray_of_segment_type(
+      segment_type = segment_type
+    ).
+
+  ENDMETHOD .
+
+
+  METHOD get_date_from_datetime .
+
+    IF ( data IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    CONVERT TIME STAMP CONV xsddatetime_z( CONV num14( data ) )
+       TIME ZONE space
+       INTO DATE result .
+
+  ENDMETHOD.
 
 
   METHOD get_filtering_criteria .
@@ -354,11 +319,19 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
        INTO TIME STAMP DATA(end_date)
        TIME ZONE space .
 
+    DATA(employee_codes) = me->get_employee_codes( ).
+
+    DATA(fields) = VALUE zstring_tab( ( CONV sxms_value( 'DR.TpSituacao' ) ) ) .
+    DATA(additional_fields) = VALUE zarray_ofstring(
+      string     = fields
+    ).
+
     result = VALUE zsalary_export_criteria(
       code_target                    = 'Any'
       code_time_type                 = 'Any'
       code_types                     = code_types
       company_code                   = me->company_code
+      employee_codes                 = employee_codes
       end_date                       = end_date
       export_time_format             = export_time_format-startandendtime
       group_sequential_absences      = abap_on
@@ -367,189 +340,8 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
       only_partial_day_absences      = abap_off
       start_date                     = start_date
       target_type                    = 'Any'
+      additional_fields              = additional_fields
     ).
-
-  ENDMETHOD .
-
-
-  METHOD get_user_access .
-
-    CONSTANTS:
-      BEGIN OF user,
-        company_code    TYPE zwsuser-company_code VALUE 'DESCONTAO',
-        hashed_password TYPE zwsuser-hashed_password VALUE '',
-        password        TYPE zwsuser-password VALUE '1234',
-        user_code       TYPE zwsuser-user_code VALUE 'sapuser',
-      END OF user .
-
-    result = VALUE zwsuser(
-      company_code    = user-company_code
-      hashed_password = user-hashed_password
-      password        = user-password
-      user_code       = user-user_code
-    ).
-
-  ENDMETHOD .
-
-
-
-  METHOD get_proxy .
-
-    CONSTANTS:
-      logical_port TYPE prx_logical_port_name VALUE 'YLP_IELO_WEB_SERVICE' .
-
-    TRY .
-        result = NEW yelo_co_ielo_web_service(
-          logical_port_name = logical_port ) .
-      CATCH cx_ai_system_fault INTO DATA(error).
-        me->messages = ycl_hcm_application_log=>map_excep_to_bapiret2( error->errortext ).
-    ENDTRY.
-
-  ENDMETHOD .
-
-
-  METHOD get_input .
-
-    DATA(filtering_criteria) = me->get_filtering_criteria( ) .
-    IF ( filtering_criteria IS INITIAL ) .
-      RETURN .
-    ENDIF .
-
-    DATA(user) = me->get_user_access( ) .
-    IF ( user IS INITIAL ) .
-      RETURN .
-    ENDIF .
-
-    result = VALUE zielo_web_service_export_sala1(
-      filtering_criteria = filtering_criteria
-      user               = user
-    ).
-
-  ENDMETHOD .
-
-
-
-  METHOD get_code_types .
-
-    TYPES:
-      BEGIN OF ty_types,
-        infty TYPE infty,
-        code  TYPE zsegment_type,
-      END OF ty_types,
-      tab_types TYPE STANDARD TABLE OF ty_types
-                WITH DEFAULT KEY .
-
-    IF ( lines( me->filter-infotipos ) EQ 0 ) .
-      RETURN .
-    ENDIF .
-
-    DATA(code_types) = VALUE tab_types(
-      ( infty = '2001' code  = 'PaidAbsence' )
-      ( infty = '2002' code  = 'PaidWork' ) " 2002  PaidWork  C - Presenças
-      ( infty = '2001' code  = 'UnpaidAbsence' )
-      ( infty = '2010' code  = 'Overtime' ) " 2010 Overtime B-Trabalho Extraordinário
-    ).
-
-    DATA(range_infotipos) = VALUE infty_range_tab(
-      FOR r IN me->filter-infotipos (
-        sign   = if_fsbp_const_range=>sign_include
-        option = if_fsbp_const_range=>option_equal
-        low    = r
-      )
-    ) .
-
-    SORT range_infotipos ASCENDING BY low .
-
-    DATA(segment_type) = VALUE zsegment_type_tab(
-      FOR t IN code_types
-      WHERE ( infty IN range_infotipos )
-      ( t-code )
-    ).
-
-    result = VALUE zarray_of_segment_type(
-      segment_type = segment_type
-    ).
-
-  ENDMETHOD .
-
-
-  METHOD map_salary_time .
-
-    " um ID temporario sera criado para ligar as duas tabelas
-    DATA:
-      temp_id TYPE ythcm0003-id VALUE 0000000000 .
-
-    IF ( lines( data ) EQ 0 ) .
-      RETURN .
-    ENDIF .
-
-    me->is_valid_employees_code( CHANGING data = data ).
-
-    TRY .
-        me->imported = VALUE ythcm0003_t(
-          FOR l IN data
-            ( gjahr           = |{ sy-datum(4) }|
-              id              = me->get_id_temp( )
-              code_in_hours   = l-code_in_hours
-              code_type       = l-code_type
-              duration        = COND #( WHEN l-code_in_hours EQ abap_true
-                                        THEN l-duration )
-              employee_code   = CONV numc08( l-employee_code )
-              end_date_time   = l-end_date_time
-              end_date        = me->get_date_from_datetime( l-end_date_time )
-              end_time        = me->get_time_from_datetime( l-end_date_time )
-              number_of_days  = l-number_of_days
-              salary_code     = condense( l-salary_code )
-              start_date_time = l-start_date_time
-              start_time      = me->get_time_from_datetime( l-start_date_time )
-              start_date      = me->get_date_from_datetime( l-start_date_time )
-              credat          = sy-datum
-              cretim          = sy-uzeit
-              crenam          = sy-uname
-            )
-          )  .
-      CATCH cx_sy_conversion_no_number INTO DATA(error) .
-        CLEAR me->imported .
-        IF ( 0 EQ 1 ). MESSAGE i000(zhcm). ENDIF .
-        me->set_log( type   = if_xo_const_message=>error
-                     number = me->message-general
-                     m1     = CONV #( error->get_text( ) )
-        ).
-        RETURN .
-    ENDTRY .
-
-    DELETE me->imported WHERE id IS INITIAL .
-
-    me->header = VALUE ythcm0001_t(
-      FOR i IN me->imported (
-        gjahr   = i-gjahr
-        id      = i-id
-        bukrs   = me->filter-empresa
-        pernr   = i-employee_code
-        direct  = 'CONSUMER'
-        type    = me->get_type( i-code_type )
-        subtype = i-salary_code
-        status  = '01' "  Integrado com sucesso
-        credat  = i-credat
-        cretim  = i-cretim
-        crenam  = i-crenam
-    ) ) .
-
-  ENDMETHOD.
-
-
-  METHOD get_id_temp .
-
-    DATA:
-      random TYPE string .
-
-    CALL FUNCTION 'GENERAL_GET_RANDOM_STRING'
-      EXPORTING
-        number_chars  = 10
-      IMPORTING
-        random_string = random.
-
-    result = CONV #( random ) .
 
   ENDMETHOD .
 
@@ -579,17 +371,55 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
   ENDMETHOD .
 
 
-  METHOD get_date_from_datetime .
+  METHOD get_id_temp .
 
-    IF ( data IS INITIAL ) .
+    DATA:
+      random TYPE string .
+
+    CALL FUNCTION 'GENERAL_GET_RANDOM_STRING'
+      EXPORTING
+        number_chars  = 10
+      IMPORTING
+        random_string = random.
+
+    result = CONV #( random ) .
+
+  ENDMETHOD .
+
+
+  METHOD get_input .
+
+    DATA(filtering_criteria) = me->get_filtering_criteria( ) .
+    IF ( filtering_criteria IS INITIAL ) .
       RETURN .
     ENDIF .
 
-    CONVERT TIME STAMP CONV xsddatetime_z( CONV num14( data ) )
-       TIME ZONE space
-       INTO DATE result .
+    DATA(user) = me->get_user_access( ) .
+    IF ( user IS INITIAL ) .
+      RETURN .
+    ENDIF .
 
-  ENDMETHOD.
+    result = VALUE zielo_web_service_export_sala1(
+      filtering_criteria = filtering_criteria
+      user               = user
+    ).
+
+  ENDMETHOD .
+
+
+  METHOD get_proxy .
+
+    CONSTANTS:
+      logical_port TYPE prx_logical_port_name VALUE 'YLP_IELO_WEB_SERVICE' .
+
+    TRY .
+        result = NEW yelo_co_ielo_web_service(
+          logical_port_name = logical_port ) .
+      CATCH cx_ai_system_fault INTO DATA(error).
+        me->messages = ycl_hcm_application_log=>map_excep_to_bapiret2( error->errortext ).
+    ENDTRY.
+
+  ENDMETHOD .
 
 
   METHOD get_time_from_datetime .
@@ -636,6 +466,346 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
     result = VALUE #( compare[ code_type = data ]-type OPTIONAL ) .
 
   ENDMETHOD.
+
+
+  METHOD get_user_access .
+
+    result =
+      NEW ycl_hcm_elo_maintenance( )->yif_hcm_elo_data_maintenance~get_user_access( ) .
+
+  ENDMETHOD .
+
+
+  METHOD is_valid_employees_code .
+
+    DATA:
+      " Numeros de registros validos (ja criados no SAP)
+      valid_employees TYPE pernr_tab,
+      string_employee TYPE zsalary_time-employee_code.
+
+    IF ( lines( data ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    DATA(employees) = VALUE pernr_tab( FOR e IN data ( CONV #( e-employee_code ) ) ) .
+    SORT employees ASCENDING BY table_line .
+    DELETE ADJACENT DUPLICATES FROM employees COMPARING table_line .
+
+    SELECT pernr
+      FROM pa0003
+       FOR ALL ENTRIES IN @employees
+     WHERE pernr EQ @employees-table_line
+     ORDER BY PRIMARY KEY
+      INTO TABLE @valid_employees .
+
+    IF ( sy-subrc NE 0 ) .
+      CLEAR data .
+      RETURN .
+    ENDIF .
+
+    DATA(data_temp) = data .
+    CLEAR data .
+
+    LOOP AT data_temp ASSIGNING FIELD-SYMBOL(<employee>) .
+
+      IF ( line_exists( valid_employees[ table_line = CONV pernr_d( <employee>-employee_code ) ] ) ) .
+        APPEND <employee> TO data .
+        CONTINUE .
+      ENDIF .
+
+      IF ( 0 EQ 1 ). MESSAGE i016(zhcm). ENDIF .
+      me->set_log( type   = if_xo_const_message=>error
+                   number = me->message-invalid_employee
+                   m1     = |{ <employee>-employee_code ALPHA = OUT }|
+      ).
+
+    ENDLOOP .
+
+  ENDMETHOD .
+
+
+  METHOD is_valid_subtypes .
+
+    IF ( lines( data ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    DATA(subtypes) = VALUE subtyp_tab( FOR s IN data ( CONV #( s-salary_code ) ) ) .
+    SORT subtypes ASCENDING BY table_line .
+    DELETE ADJACENT DUPLICATES FROM subtypes COMPARING table_line .
+
+    IF ( lines( subtypes ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    SELECT subty
+      FROM t554s
+       FOR ALL ENTRIES IN @subtypes
+     WHERE subty EQ @subtypes-table_line
+       AND endda GE @sy-datum
+       AND begda LE @sy-datum
+      INTO TABLE @DATA(valid_subtypes) .
+
+    DATA(data_temp) = data .
+    CLEAR data .
+
+    LOOP AT data_temp ASSIGNING FIELD-SYMBOL(<subtype>) .
+
+      IF ( line_exists( valid_subtypes[ subty = CONV subty( <subtype>-salary_code ) ] ) ) .
+        APPEND <subtype> TO data .
+        CONTINUE .
+      ENDIF .
+      IF ( 0 EQ 1 ). MESSAGE i021(zhcm). ENDIF .
+      me->set_log( type   = if_xo_const_message=>error
+                   number = me->message-invalid_subtype
+                   m1     = |{ <subtype>-salary_code ALPHA = OUT }|
+      ).
+
+    ENDLOOP .
+
+  ENDMETHOD .
+
+
+  METHOD mainten_imported .
+
+    DATA:
+      log TYPE bapiret2_t .
+
+    IF ( lines( me->header )   EQ 0 ) OR
+       ( lines( me->imported ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    LOOP AT me->filter-infotipos ASSIGNING FIELD-SYMBOL(<infotype>).
+
+      CASE <infotype> .
+
+        WHEN ycl_hcm_elo_infotypes=>infotypes-ausencias .
+
+          me->prepare_by_infotype(
+            EXPORTING
+              im_infotype = ycl_hcm_elo_infotypes=>infotypes-ausencias
+              im_header   = me->header
+              im_imported = me->imported
+            IMPORTING
+              ex_header   = DATA(local_header)
+              ex_imported = DATA(local_imported)
+          ).
+
+          IF ( lines( local_header )   EQ 0 ) OR
+             ( lines( local_imported ) EQ 0 ) .
+            CONTINUE .
+          ENDIF .
+
+          log = ycl_hcm_elo_maintenance=>mainten_2001_imported(
+                  EXPORTING
+                    header       = local_header
+                    impored_type = local_imported
+                ).
+
+          result = VALUE #( BASE result ( LINES OF log ) ) .
+
+        WHEN ycl_hcm_elo_infotypes=>infotypes-presencas .
+
+          me->prepare_by_infotype(
+            EXPORTING
+              im_infotype = ycl_hcm_elo_infotypes=>infotypes-presencas
+              im_header   = me->header
+              im_imported = me->imported
+            IMPORTING
+              ex_header   = local_header
+              ex_imported = local_imported
+          ).
+
+          IF ( lines( local_header ) EQ 0 ) OR
+             ( lines( local_imported ) EQ 0 ) .
+            CONTINUE .
+          ENDIF .
+
+          log = ycl_hcm_elo_maintenance=>mainten_2002_imported(
+                  EXPORTING
+                    header       = local_header
+                    imported_type = local_imported
+                ).
+
+          result = VALUE #( BASE result ( LINES OF log ) ) .
+
+        WHEN ycl_hcm_elo_infotypes=>infotypes-infos_remun_emp .
+
+          me->prepare_by_infotype(
+            EXPORTING
+              im_infotype = ycl_hcm_elo_infotypes=>infotypes-infos_remun_emp
+              im_header   = me->header
+              im_imported = me->imported
+            IMPORTING
+              ex_header   = local_header
+              ex_imported = local_imported
+          ).
+
+          IF ( lines( local_header ) EQ 0 ) OR
+             ( lines( local_imported ) EQ 0 ) .
+            CONTINUE .
+          ENDIF .
+
+          log = ycl_hcm_elo_maintenance=>mainten_2010_imported(
+                  EXPORTING
+                    header       = local_header
+                    imported_type = local_imported
+                ).
+
+          result = VALUE #( BASE result ( LINES OF log ) ) .
+
+        WHEN OTHERS .
+
+      ENDCASE .
+
+    ENDLOOP .
+
+    IF ( line_exists( log[ type = if_xo_const_message=>success ] ) ) .
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = abap_on
+*      IMPORTING
+*         return =
+        .
+    ENDIF .
+
+  ENDMETHOD .
+
+
+  METHOD map_salary_time .
+
+    " um ID temporario sera criado para ligar as duas tabelas
+    DATA:
+      temp_id TYPE ythcm0003-id VALUE 0000000000 .
+
+    IF ( lines( data ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    me->is_valid_employees_code( CHANGING data = data ).
+*   me->is_valid_subtypes( CHANGING data = data ).
+
+    TRY .
+        me->imported = VALUE ythcm0003_t(
+          FOR l IN data
+            ( gjahr           = |{ sy-datum(4) }|
+              id              = me->get_id_temp( )
+              code_in_hours   = l-code_in_hours
+              code_type       = l-code_type
+              duration        = COND #( WHEN l-code_in_hours EQ abap_true
+                                        THEN l-duration )
+              employee_code   = CONV numc08( l-employee_code )
+              end_date_time   = l-end_date_time
+              end_date        = me->get_date_from_datetime( l-end_date_time )
+              end_time        = me->get_time_from_datetime( l-end_date_time )
+              number_of_days  = l-number_of_days
+              salary_code     = condense( l-salary_code )
+              start_date_time = l-start_date_time
+              start_time      = me->get_time_from_datetime( l-start_date_time )
+              start_date      = me->get_date_from_datetime( l-start_date_time )
+              tpsituacao      = me->get_tp_situacao( l )
+              credat          = sy-datum
+              cretim          = sy-uzeit
+              crenam          = sy-uname
+            )
+          )  .
+      CATCH cx_sy_conversion_no_number INTO DATA(error) .
+        CLEAR me->imported .
+        IF ( 0 EQ 1 ). MESSAGE i000(zhcm). ENDIF .
+        me->set_log( type   = if_xo_const_message=>error
+                     number = me->message-general
+                     m1     = CONV #( error->get_text( ) )
+        ).
+        RETURN .
+    ENDTRY .
+
+    DELETE me->imported WHERE id IS INITIAL .
+
+    me->header = VALUE ythcm0001_t(
+      FOR i IN me->imported (
+        gjahr   = i-gjahr
+        id      = i-id
+        bukrs   = me->filter-empresa
+        pernr   = i-employee_code
+        direct  = 'CONSUMER'
+        type    = me->get_type( i-code_type )
+        subtype = i-salary_code
+        status  = '01' "  Integrado com sucesso
+        credat  = i-credat
+        cretim  = i-cretim
+        crenam  = i-crenam
+    ) ) .
+
+  ENDMETHOD.
+
+
+  METHOD prepare_by_infotype .
+
+    TYPES:
+      tab_header TYPE RANGE OF ythcm0001-id .
+
+    CLEAR:
+      ex_header, ex_imported .
+
+    IF ( im_infotype IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    IF ( lines( im_header )   EQ 0 ) OR
+       ( lines( im_imported ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    ex_header = VALUE #(
+      FOR h IN im_header
+      WHERE ( type EQ im_infotype )
+      ( CORRESPONDING #( h ) )
+    ).
+
+    " Recupera todos os ID's referentes a esse infotype
+    DATA(headers) = VALUE tab_header(
+      FOR l IN ex_header (
+        sign   = rsmds_c_sign-including
+        option = rsmds_c_option-equal
+        low    = l-id
+      )
+    ) .
+
+    " Recupera a chave para correspondecia do ano
+    DATA(year) = VALUE #( ex_header[ 1 ]-gjahr OPTIONAL ) .
+
+    ex_imported = VALUE #(
+      FOR i IN im_imported
+      WHERE ( id IN headers AND gjahr EQ year )
+      ( CORRESPONDING #( i ) )
+    ).
+
+  ENDMETHOD .
+
+
+  METHOD get_tp_situacao .
+
+    CONSTANTS:
+      lc_field TYPE string VALUE 'DR.TpSituacao' .
+
+    IF ( data IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    IF ( lines( data-additional_fields-key_value_ofstringstring ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    ASSIGN data-additional_fields-key_value_ofstringstring[ key = lc_field ]
+        TO FIELD-SYMBOL(<tp_situacao>) .
+    IF ( <tp_situacao> IS NOT ASSIGNED ) .
+      RETURN .
+    ENDIF .
+
+    result = <tp_situacao>-value .
+
+  ENDMETHOD .
 
 
   METHOD prepare_data .
@@ -692,12 +862,19 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
           start_date_time = <imported>-start_date_time
           start_date      = <imported>-start_date
           start_time      = <imported>-start_time
-          credat          = <saved>-credat
-          cretim          = <saved>-cretim
-          crenam          = <saved>-crenam
-          chadat          = <imported>-credat
-          chatim          = <imported>-cretim
-          chanam          = <imported>-crenam
+          tpsituacao      = <imported>-tpsituacao
+*         credat          = <saved>-credat
+*         cretim          = <saved>-cretim
+*         crenam          = <saved>-crenam
+          credat          = sy-datum
+          cretim          = sy-uzeit
+          crenam          = sy-uname
+*         chadat          = <imported>-credat
+*         chatim          = <imported>-cretim
+*         chanam          = <imported>-crenam
+*         chadat          = sy-datum
+*         chatim          = sy-uzeit
+*         chanam          = sy-uname
         ).
 
         " Atualizar tambem os dados de Header
@@ -715,12 +892,18 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
             type    = <header>-type
             subtype = <header>-subtype
             status  = <header>-status
-            credat  = <header>-credat
-            cretim  = <header>-chatim
-            crenam  = <header>-crenam
-            chadat  = <imported>-credat
-            chatim  = <imported>-cretim
-            chanam  = <imported>-crenam
+            credat  = sy-datum
+            cretim  = sy-uzeit
+            crenam  = sy-uname
+*            credat  = <header>-credat
+*            cretim  = <header>-chatim
+*            crenam  = <header>-crenam
+**           chadat  = <imported>-credat
+**           chatim  = <imported>-cretim
+**           chanam  = <imported>-crenam
+*            chadat  = sy-datum
+*            chatim  = sy-uzeit
+*            chanam  = sy-uname
           ).
 
           <header> = header_prepared .
@@ -761,111 +944,41 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
       RETURN .
     ENDIF .
 
+    " ZHCM 022 Erro ao salvar dados importados da Inteface.
+    IF ( 0 EQ 1 ). MESSAGE i022(zhcm). ENDIF .
+    result = VALUE #(
+      ( type       = if_xo_const_message=>error
+        id         = ycl_hcm_application_log=>message-id
+        number     = me->message-save_error
+      )
+    ).
+
     MODIFY ythcm0001 FROM TABLE me->header .
     IF ( sy-subrc EQ 0 ) .
       MODIFY ythcm0003 FROM TABLE me->imported .
 
       IF ( sy-subrc EQ 0 ) .
 
-        IF ( 0 EQ 1 ). MESSAGE i005(zhcm). ENDIF .
-        me->set_log( number = me->message-imported_successfully ) .
-
         COMMIT WORK AND WAIT .
+
+        IF ( 0 EQ 1 ). MESSAGE i005(zhcm). ENDIF .
+        IF ( 0 EQ 1 ). MESSAGE i023(zhcm). ENDIF .
+        result = VALUE #(
+          ( type       = if_xo_const_message=>success
+            id         = ycl_hcm_application_log=>message-id
+            number     = me->message-imported_successfully
+          )
+          ( type       = if_xo_const_message=>success
+            id         = ycl_hcm_application_log=>message-id
+            number     = me->message-save_error
+          )
+        ).
 
       ENDIF .
 
     ENDIF .
 
   ENDMETHOD.
-
-
-  METHOD mainten_imported .
-
-    IF ( lines( me->header )   EQ 0 ) OR
-       ( lines( me->imported ) EQ 0 ) .
-      RETURN .
-    ENDIF .
-
-    LOOP AT me->filter-infotipos ASSIGNING FIELD-SYMBOL(<infotype>).
-
-      CASE <infotype> .
-
-        WHEN ycl_hcm_elo_infotypes=>infotypes-ausencias .
-
-          me->prepare_by_infotype(
-            EXPORTING
-              im_infotype = ycl_hcm_elo_infotypes=>infotypes-ausencias
-              im_header   = me->header
-              im_imported = me->imported
-            IMPORTING
-              ex_header   = DATA(local_header)
-              ex_imported = DATA(local_imported)
-          ).
-
-          IF ( lines( local_header ) EQ 0 ) OR
-             ( lines( local_imported ) EQ 0 ) .
-            RETURN .
-          ENDIF .
-
-          ycl_hcm_elo_maintenance=>mainten_2001_imported(
-            EXPORTING
-              header       = local_header
-              impored_type = local_imported
-          ).
-
-        WHEN ycl_hcm_elo_infotypes=>infotypes-presencas .
-
-          me->prepare_by_infotype(
-            EXPORTING
-              im_infotype = ycl_hcm_elo_infotypes=>infotypes-presencas
-              im_header   = me->header
-              im_imported = me->imported
-            IMPORTING
-              ex_header   = local_header
-              ex_imported = local_imported
-          ).
-
-          IF ( lines( local_header ) EQ 0 ) OR
-             ( lines( local_imported ) EQ 0 ) .
-            RETURN .
-          ENDIF .
-
-          ycl_hcm_elo_maintenance=>mainten_2002_imported(
-            EXPORTING
-              header       = local_header
-              impored_type = local_imported
-          ).
-
-        WHEN ycl_hcm_elo_infotypes=>infotypes-infos_remun_emp .
-
-          me->prepare_by_infotype(
-            EXPORTING
-              im_infotype = ycl_hcm_elo_infotypes=>infotypes-infos_remun_emp
-              im_header   = me->header
-              im_imported = me->imported
-            IMPORTING
-              ex_header   = local_header
-              ex_imported = local_imported
-          ).
-
-          IF ( lines( local_header ) EQ 0 ) OR
-             ( lines( local_imported ) EQ 0 ) .
-            RETURN .
-          ENDIF .
-
-          ycl_hcm_elo_maintenance=>mainten_2010_imported(
-            EXPORTING
-              header       = me->header
-              impored_type = me->imported
-          ).
-
-        WHEN OTHERS .
-
-      ENDCASE .
-
-    ENDLOOP .
-
-  ENDMETHOD .
 
 
   METHOD set_log .
@@ -882,96 +995,134 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
   ENDMETHOD .
 
 
-  METHOD is_valid_employees_code .
-
-    DATA:
-      "! <p class="shorttext synchronized" lang="pt">Numeros de registros validos (ja criados no SAP)</p>
-      valid_employees TYPE pernr_tab,
-      string_employee TYPE zsalary_time-employee_code.
-
-    IF ( lines( data ) EQ 0 ) .
-      RETURN .
-    ENDIF .
-
-    DATA(employees) = VALUE pernr_tab( FOR e IN data ( CONV #( e-employee_code ) ) ) .
-    SORT employees ASCENDING BY table_line .
-    DELETE ADJACENT DUPLICATES FROM employees COMPARING table_line .
-
-    SELECT pernr
-      FROM pa0003
-       FOR ALL ENTRIES IN @employees
-     WHERE pernr EQ @employees-table_line
-     ORDER BY PRIMARY KEY
-      INTO TABLE @valid_employees .
-
-    IF ( sy-subrc NE 0 ) .
-      CLEAR data .
-      RETURN .
-    ENDIF .
-
-    DATA(data_temp) = data .
-    CLEAR data .
-
-    LOOP AT data_temp ASSIGNING FIELD-SYMBOL(<employee>) .
-
-      IF ( line_exists( valid_employees[ table_line = CONV pernr_d( <employee>-employee_code ) ] ) ) .
-        APPEND <employee> TO data .
-        CONTINUE .
-      ENDIF .
-
-      IF ( 0 EQ 1 ). MESSAGE i016(zhcm). ENDIF .
-      me->set_log( type   = if_xo_const_message=>error
-                   number = me->message-invalid_employee
-                   m1     = |{ <employee>-employee_code ALPHA = OUT }|
-      ).
-
-    ENDLOOP .
-
-  ENDMETHOD .
-
-
-  METHOD prepare_by_infotype .
+  METHOD test_interface .
 
     TYPES:
-      tab_header TYPE RANGE OF ythcm0001-id .
+      BEGIN OF ty_result,
+        code_in_hours   TYPE zsalary_time-code_in_hours,
+        code_type       TYPE zsalary_time-code_type,
+        duration        TYPE zsalary_time-duration,
+        employee_code   TYPE zsalary_time-employee_code,
+        end_date_time   TYPE zsalary_time-end_date_time,
+        number_of_days  TYPE zsalary_time-number_of_days,
+        salary_code     TYPE zsalary_time-salary_code,
+        start_date_time TYPE zsalary_time-start_date_time,
+        tpsituacao      TYPE ythcm0003-tpsituacao,
+      END OF ty_result,
+      tab_result TYPE STANDARD TABLE OF ty_result
+                 WITH DEFAULT KEY .
 
-    CLEAR:
-      ex_header, ex_imported .
+    DATA:
+      obj_proxy    TYPE REF TO yelo_co_ielo_web_service,
+      logical_port TYPE  prx_logical_port_name VALUE 'YLP_IELO_WEB_SERVICE',
+      input        TYPE zielo_web_service_list_employ1.
 
-    IF ( im_infotype IS INITIAL ) .
+    TRY .
+        obj_proxy = NEW yelo_co_ielo_web_service(
+          logical_port_name = logical_port
+        ) .
+      CATCH cx_ai_system_fault.
+    ENDTRY .
+
+    IF ( obj_proxy IS NOT BOUND ) .
+      result = 'Erro ao criar proxy.' .
+      RETURN .
+    ENDIF.
+
+    IF ( start IS INITIAL ) .
       RETURN .
     ENDIF .
 
-    IF ( lines( im_header ) EQ 0 ) OR
-       ( lines( im_imported ) EQ 0 ) .
+    IF ( end IS INITIAL ) .
       RETURN .
     ENDIF .
 
-    ex_header = VALUE #(
-      FOR h IN im_header
-      WHERE ( type EQ im_infotype )
-      ( CORRESPONDING #( h ) )
+    CONVERT DATE start
+       INTO TIME STAMP DATA(start_date)
+       TIME ZONE space .
+
+    CONVERT DATE end
+       INTO TIME STAMP DATA(end_date)
+       TIME ZONE space .
+
+    DATA(user) = VALUE zwsuser(
+      company_code    = 'DESCONTAO'
+      hashed_password = '' " false
+      password        = '1234'
+      user_code       = 'sapuser'
     ).
 
-    " Recupera todos os ID's referentes a esse infotype
-    DATA(headers) = VALUE tab_header(
-      FOR l IN ex_header (
-        sign   = rsmds_c_sign-including
-        option = rsmds_c_option-equal
-        low    = l-id
+
+    DATA(fields) = VALUE zstring_tab( ( CONV sxms_value( 'DR.TpSituacao' ) ) ) .
+    DATA(additional_fields) = VALUE zarray_ofstring(
+      string     = fields
+    ).
+
+    DATA(sal_filtering_criteria) = VALUE zsalary_export_criteria(
+      code_target                    = 'Any'
+      code_time_type                 = 'Any'
+      company_code                   = 'DESCONTAO'
+      end_date                       = end_date
+      export_time_format             = 'IncludeStartAndEndTimeForAllSegments'
+      group_sequential_absences      = abap_on
+      ignore_rest_days_while_groupin = abap_off
+      only_complete_day_absences     = abap_off
+      only_partial_day_absences      = abap_off
+      start_date                     = start_date
+      target_type                    = 'Any'
+      additional_fields              = additional_fields
+    ).
+
+    DATA(sal_input) = VALUE zielo_web_service_export_sala1(
+      filtering_criteria = sal_filtering_criteria
+      user               = user
+    ).
+
+    TRY .
+        obj_proxy->export_salary_time(
+          EXPORTING
+            input  = sal_input
+          IMPORTING
+            output = DATA(output)
+        ).
+
+      CATCH cx_ai_system_fault INTO DATA(lo_error).
+        result = lo_error->errortext .
+        result = COND #( WHEN lo_error->get_longtext( ) IS INITIAL
+                         THEN lo_error->get_text( )
+                         ELSE lo_error->get_longtext( ) ) .
+        RETURN .
+    ENDTRY .
+
+    DATA(out) = VALUE tab_result(
+      FOR s IN output-salary_time_info-salary_time (
+*      ( code_in_hours   = s-code_in_hours
+*        code_type       = s-code_type
+*        duration        = s-duration
+*        employee_code   = s-employee_code
+*        end_date_time   = s-end_date_time
+*        number_of_days  = s-number_of_days
+*        salary_code     = s-salary_code
+*        start_date_time = s-start_date_time
+*       tpsituacao      = new ycl_hcm_elo_importation( )->get_tp_situacao( s )
+        CORRESPONDING #( s )
       )
-    ) .
-
-    " Recupera a chave para correspondecia do ano
-    DATA(year) = VALUE #( ex_header[ 1 ]-gjahr OPTIONAL ) .
-
-    ex_imported = VALUE #(
-      FOR i IN im_imported
-      WHERE ( id IN headers AND gjahr EQ year )
-      ( CORRESPONDING #( i ) )
     ).
+
+    TRY.
+        cl_salv_table=>factory( IMPORTING r_salv_table = DATA(alv)
+                                CHANGING  t_table = out ).
+        alv->set_screen_status( pfstatus      = 'STANDARD_FULLSCREEN'
+                                report        = 'SAPLKKBL'
+                                set_functions = alv->c_functions_all ) .
+
+        DATA(lo_display) = alv->get_display_settings( ) .
+        IF ( lo_display IS BOUND ) .
+          lo_display->set_striped_pattern( cl_salv_display_settings=>true ) .
+        ENDIF .
+        alv->display( ).
+      CATCH cx_salv_msg.
+    ENDTRY.
 
   ENDMETHOD .
-
-
 ENDCLASS.
