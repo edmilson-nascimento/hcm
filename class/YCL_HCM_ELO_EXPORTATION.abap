@@ -16,6 +16,7 @@ CLASS ycl_hcm_elo_exportation DEFINITION
         p0002 TYPE infty VALUE '0002',
         p0105 TYPE infty VALUE '0105',
         p0337 TYPE infty VALUE '0337',
+        p2010 TYPE infty VALUE '2010',
       END OF inftyp .
 
     "! <p class="shorttext synchronized" lang="pt">Construtor</p>
@@ -36,6 +37,7 @@ CLASS ycl_hcm_elo_exportation DEFINITION
     DATA:
       "! <p class="shorttext synchronized" lang="pt">Armazena mensagens de processamento da classe</p>
       messages TYPE bapiret2_t,
+      "! <p class="shorttext synchronized" lang="pt">Nro de pessoal que esta sendo processado</p>
       employee TYPE p0001-pernr,
       "! <p class="shorttext synchronized" lang="pt">Header de Importção</p>
       header   TYPE ythcm0001_t.
@@ -71,8 +73,14 @@ CLASS ycl_hcm_elo_exportation DEFINITION
     "! <p class="shorttext synchronized" lang="pt">Retorna dados de acesso (user,pass and etc)</p>
     METHODS get_user_access
       RETURNING VALUE(result) TYPE zwsuser .
-    "! <p class="shorttext synchronized" lang="pt">Retorna a datetime convertido</p>
+    "! <p class="shorttext synchronized" lang="pt">Retorna um datetime convertido</p>
     METHODS map_to_datetime
+      IMPORTING
+        !data         TYPE d
+      RETURNING
+        VALUE(result) TYPE xsddatetime_z .
+    "! <p class="shorttext synchronized" lang="pt">Retorna um decimal convertido</p>
+    METHODS map_to_decimal
       IMPORTING
         !data         TYPE d
       RETURNING
@@ -80,8 +88,10 @@ CLASS ycl_hcm_elo_exportation DEFINITION
     "! <p class="shorttext synchronized" lang="pt">Retorna a foto do colaborar (formato RAW)</p>
     METHODS get_photo
       RETURNING VALUE(result) TYPE xstring .
-
-
+    "! <p class="shorttext synchronized" lang="pt">Adiciona uma mensagem ao log de processamento</p>
+    METHODS add_log
+      IMPORTING
+        !msg TYPE bapiret2_t .
 ENDCLASS.
 
 
@@ -200,7 +210,9 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
   METHOD get_employee .
 
     CONSTANTS:
-      company_code TYPE zemployee_filtering_criteria-company_code VALUE 'DESCONTAO'.
+      company_code TYPE zemployee_filtering_criteria-company_code VALUE 'DESCONTAO',
+      masc         TYPE char1 VALUE 'M',
+      femi         TYPE char1 VALUE 'F'.
 
     DATA(infotype_0000) = me->get_detail_0000( ) .
     IF ( infotype_0000 IS INITIAL ) .
@@ -213,18 +225,32 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
     DATA(infotype_0337) = me->get_detail_0337( ) .
 
     result = VALUE zemployee(
-      employee_code              = |{ infotype_0001-pernr ALPHA = OUT }|
-      name                       = infotype_0002-cname
+
+      active              = abap_on
+      company_code        = company_code
+
+      start_contract_date = me->map_to_datetime( infotype_0001-begda )
+      end_contract_date   = me->map_to_datetime( infotype_0001-endda )
+
+      employee_code       = |{ infotype_0001-pernr ALPHA = OUT }|
+      name                = infotype_0002-cname
+      abbreviated_name    = |{ infotype_0002-cname }|
+
       professional_category_code = infotype_0337-prcat
       cost_central_code          = infotype_0001-kostl
+
       additional_code1           = infotype_0001-orgeh
+
       start_date                 = infotype_0001-begda
       end_date                   = infotype_0001-endda
+
       email                      = infotype_0105-usrid_long
       birth_date                 = me->map_to_datetime( infotype_0002-gbdat )
       photo                      = me->get_photo( )
-      gender                     = ''
-    ).
+      gender  = COND #( WHEN infotype_0002-gesch EQ '1' THEN masc
+                        WHEN infotype_0002-gesch EQ '2' THEN femi
+                        ELSE abap_off )
+    ) .
 
   ENDMETHOD .
 
@@ -297,11 +323,9 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
     DATA:
       exists       TYPE char1,
       connect_info TYPE toav0,
-
       length       TYPE int4,
       message      TYPE bapiret2,
       document     TYPE STANDARD TABLE OF tbl1024,
-
       buffer       TYPE xstring.
 
     IF ( me->employee IS INITIAL ) .
@@ -334,21 +358,24 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
         ex_message  = message
       TABLES
         ex_document = document.
-
     IF ( lines( document ) EQ 0 ) .
       RETURN .
     ENDIF .
 
-    " Retorna vazio caso nao tenha autorizacao
-    IF ( length IS INITIAL ) .
-      length = 1024 * lines( document ) .
+    " Alterar o tipo de menasgem, pois esse valor nao seria impeditivo
+    IF ( message-type EQ if_xo_const_message=>error ) .
+      message-type = if_xo_const_message=>warning .
+      me->add_log( msg = VALUE #( ( message ) ) ) .
+      RETURN .
     ENDIF .
+
+    DESCRIBE TABLE document LINES DATA(last_line) .
 
     CALL FUNCTION 'SCMS_BINARY_TO_XSTRING'
       EXPORTING
         input_length = length
-*       first_line   = 0
-*       last_line    = 0
+        first_line   = 1
+        last_line    = last_line
       IMPORTING
         buffer       = buffer
       TABLES
@@ -361,6 +388,19 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
     ENDIF.
 
     result = buffer .
+
+  ENDMETHOD .
+
+
+  METHOD add_log .
+
+    IF ( msg IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    me->messages = VALUE #(
+      BASE me->messages ( LINES OF msg )
+    ).
 
   ENDMETHOD .
 
@@ -388,6 +428,27 @@ CLASS ycl_hcm_elo_exportation IMPLEMENTATION.
       CATCH cx_bs_soa_exception .
 
     ENDTRY .
+
+    IF ( data IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    CONVERT DATE data
+       INTO TIME STAMP result TIME ZONE space .
+
+  ENDMETHOD .
+
+
+  METHOD map_to_decimal .
+
+    DATA:
+      local_date TYPE string .
+
+    IF ( data IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    result = data .
 
   ENDMETHOD .
 
