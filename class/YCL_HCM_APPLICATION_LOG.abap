@@ -6,6 +6,17 @@ CLASS ycl_hcm_application_log DEFINITION
 
   PUBLIC SECTION.
 
+    CONSTANTS:
+      BEGIN OF ty_log,
+        object    TYPE bal_s_log-object VALUE 'YHCM',
+        subobject TYPE bal_s_log-subobject VALUE 'YHCM0001',
+        alprog    TYPE bal_s_log-alprog VALUE 'YHCM0012',
+      END OF ty_log,
+
+      BEGIN OF message,
+        id TYPE bapiret2-id VALUE 'ZHCM',
+      END OF message .
+
     TYPES:
       BEGIN OF ty_header_log,
         title     TYPE bal_s_log-extnumber,
@@ -15,57 +26,69 @@ CLASS ycl_hcm_application_log DEFINITION
         handle    TYPE balloghndl,
         lognumber TYPE balognr,
       END OF ty_header_log .
-
+    "! <p class="shorttext synchronized" lang="pt">Recebe info iniciais</p>
     METHODS constructor
       IMPORTING
         !iv_title     TYPE bal_s_log-extnumber
-        !iv_object    TYPE bal_s_log-object    DEFAULT 'ZHCM'
-        !iv_subobject TYPE bal_s_log-subobject DEFAULT 'ZHCM0001'
+        !iv_object    TYPE bal_s_log-object    DEFAULT 'YHCM'
+        !iv_subobject TYPE bal_s_log-subobject DEFAULT 'YHCM0001'
         !iv_alprog    TYPE bal_s_log-alprog .
-
-    METHODS add
-      IMPORTING
-        !is_message TYPE bal_s_msg .
-
+    "! <p class="shorttext synchronized" lang="pt">Adiciona mensagens do tipo BAPIRET1</p>
     METHODS add_bapiret1
       IMPORTING
         !is_message TYPE bapiret1 .
-
+    "! <p class="shorttext synchronized" lang="pt">Adiciona mensagens do tipo BAPIRET2</p>
     METHODS add_bapiret2
       IMPORTING
-        !is_message TYPE bapiret2 .
-
+        !message TYPE bapiret2 .
+    "! <p class="shorttext synchronized" lang="pt">Salva os dados que foram adicionados anteriormente</p>
     METHODS save .
-
+    "! <p class="shorttext synchronized" lang="pt">Exibe mensagens de log</p>
     METHODS show .
 
+    "! <p class="shorttext synchronized" lang="pt">Exibe mensagens de log (salvos)</p>
     CLASS-METHODS show_saved
       IMPORTING
         !log_numbers TYPE bal_t_logn
-        !option       TYPE i DEFAULT 0 .
-
+        !option      TYPE i DEFAULT 0 .
+    "! <p class="shorttext synchronized" lang="pt">Retorna o numero do log</p>
     METHODS get_lognumber
       RETURNING
         VALUE(result) TYPE balognr .
 
-    CLASS-METHODS get_handle_saved
-      IMPORTING
-        !iv_lognumber TYPE balhdr-lognumber
-      RETURNING
-        VALUE(result) TYPE balhdr-log_handle .
-
-    CLASS-METHODS get_messages_saved
-      IMPORTING
-        !iv_lognumber TYPE balhdr-lognumber
-      RETURNING
-        VALUE(result) TYPE balm_t .
-
-    CLASS-METHODS save_all
+    CLASS-METHODS save_single
       IMPORTING
         !is_header    TYPE ty_header_log
         !is_message   TYPE bapiret1
       RETURNING
         VALUE(result) TYPE balognr .
+    "! <p class="shorttext synchronized" lang="pt">Retorna nro do Log apos salvar os dados da tabela passada</p>
+    CLASS-METHODS save_bapiret2_tab
+      IMPORTING
+        !is_header    TYPE ty_header_log
+        !it_message   TYPE bapiret2_t
+      RETURNING
+        VALUE(result) TYPE balognr .
+    "! <p class="shorttext synchronized" lang="pt">Retorna as mensagens de acordo com o numero passado</p>
+    CLASS-METHODS get_log_bapiret2
+      IMPORTING
+        !is_log_number TYPE balognr
+      RETURNING
+        VALUE(result)  TYPE bapiret2_t .
+    "! <p class="shorttext synchronized" lang="pt">Retorna tabela de erros referente ao texto informado</p>
+    CLASS-METHODS map_excep_to_bapiret2
+      IMPORTING
+        !type         TYPE bapiret2-type DEFAULT 'E'
+        !message      TYPE string
+      RETURNING
+        VALUE(result) TYPE bapiret2_t .
+    "! <p class="shorttext synchronized" lang="pt">Salvar log de importacao (single)</p>
+    CLASS-METHODS save_imported
+      IMPORTING
+        !gjahr TYPE ythcm0001-gjahr
+        !id    TYPE ythcm0001-id
+        !pernr TYPE ythcm0001-pernr
+        !msg   TYPE bapiret2_t .
 
   PROTECTED SECTION.
 
@@ -79,6 +102,10 @@ CLASS ycl_hcm_application_log DEFINITION
     METHODS set_lognumber
       IMPORTING
         !iv_lognumber TYPE balognr .
+
+    METHODS add
+      IMPORTING
+        !is_message TYPE bal_s_msg .
 
 ENDCLASS.
 
@@ -96,24 +123,6 @@ CLASS ycl_hcm_application_log IMPLEMENTATION.
     ).
 
     me->create( ) .
-
-  ENDMETHOD.
-
-
-  METHOD add .
-
-    IF ( me->gs_header-handle IS INITIAL ) .
-      RETURN.
-    ENDIF .
-
-    IF ( is_message IS INITIAL ) .
-      RETURN.
-    ENDIF .
-
-    CALL FUNCTION 'BAL_LOG_MSG_ADD'
-      EXPORTING
-        i_log_handle = me->gs_header-handle
-        i_s_msg      = is_message.
 
   ENDMETHOD.
 
@@ -139,7 +148,20 @@ CLASS ycl_hcm_application_log IMPLEMENTATION.
 
 
   METHOD add_bapiret2 .
-  ENDMETHOD .
+
+    IF ( message IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    DATA(bal_message) =
+      cl_rmps_trf_service=>convert_bapiret2_to_balmsg( is_bapiret2 = message  ).
+    IF ( bal_message IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    me->add( bal_message ) .
+
+  ENDMETHOD.
 
 
   METHOD save.
@@ -220,275 +242,59 @@ CLASS ycl_hcm_application_log IMPLEMENTATION.
 
   METHOD show_saved.
 
-*    DATA:
-*      lt_handles         TYPE bal_t_logh,
-*      ls_handles         TYPE balloghndl,
-*      ls_display_profile TYPE bal_s_prof.
-*
-*    IF ( handle IS NOT INITIAL  ) .
-*
-*      CALL FUNCTION 'BAL_LOG_EXIST'
-*        EXPORTING
-*          i_log_handle  = handle
-*        EXCEPTIONS
-*          log_not_found = 1
-*          OTHERS        = 2.
-*
-*      IF (  sy-subrc EQ 0 ) .
-*
-*        APPEND ls_handles TO lt_handles .
-*        CLEAR  ls_handles .
-*
-*      ENDIF.
-*
-*    ENDIF .
-*
-*    IF ( lines( handles ) EQ 0  ) .
-*    ELSE .
-*
-*      LOOP AT handles INTO ls_handles .
-*
-*        CALL FUNCTION 'BAL_LOG_EXIST'
-*          EXPORTING
-*            i_log_handle  = ls_handles
-*          EXCEPTIONS
-*            log_not_found = 1
-*            OTHERS        = 2.
-*
-*        IF (  sy-subrc EQ 0 ) .
-*
-*          APPEND ls_handles TO lt_handles .
-*          CLEAR  ls_handles .
-*
-*        ENDIF.
-*
-*      ENDLOOP.
-*
-**     get standard display profile
-*      CALL FUNCTION 'BAL_DSP_PROFILE_SINGLE_LOG_GET'
-*        IMPORTING
-*          e_s_display_profile = ls_display_profile
-*        EXCEPTIONS
-*          OTHERS              = 1.
-*      IF ( sy-subrc NE 0 ) .
-*        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
-*              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
-*      ENDIF.
-*
-*
-*      CALL FUNCTION 'BAL_DSP_LOG_DISPLAY'
-*        EXPORTING
-*          i_s_display_profile  = ls_display_profile
-*          i_t_log_handle       = lt_handles
-**         i_t_msg_handle       =
-**         i_s_log_filter       =
-**         i_s_msg_filter       =
-**         i_t_log_context_filter        =
-**         i_t_msg_context_filter        =
-**         i_amodal             = space
-**         i_srt_by_timstmp     = space
-**         i_msg_context_filter_operator = 'a'
-**        importing
-**         e_s_exit_command     =
-*        EXCEPTIONS
-*          profile_inconsistent = 1
-*          internal_error       = 2
-*          no_data_available    = 3
-*          no_authority         = 4
-*          OTHERS               = 5.
-*
-*      IF sy-subrc NE 0 .
-*        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
-*              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
-*      ENDIF.
-*
-*    ENDIF.
-*
-*    FREE:
-*      lt_handles, ls_display_profile .
-
-
-
-
     DATA:
-      t_lognumber         TYPE bal_t_logn,
+      lt_log_handle  TYPE bal_t_logh,
+      lt_msg_handle  TYPE bal_t_msgh,
+      g_t_log_header TYPE balhdr_t.
 
-      e_s_log_filter      TYPE bal_s_lfil,
-      l_t_log_header      TYPE balhdr_t,
-      l_t_log_handle      TYPE bal_t_logh,
-      i_log_handle        TYPE balloghndl,
-      read_from_db_hdr(1) TYPE c,
-      l_t_log_loaded      TYPE bal_t_logh,
-      l_t_locked          TYPE balhdr_t,
-      i_s_display_profile TYPE  bal_s_prof,
-      l_s_display_profile TYPE bal_s_prof,
-*      i_variant_report    TYPE  sy-repid VALUE 'SBAL_DISPLAY',
-      number_of_protocols LIKE  sy-dbcnt VALUE 4,
-      i_srt_by_timstmp    TYPE  boolean
-      .
+    IF ( lines( log_numbers ) EQ 0 ) .
+      RETURN .
+    ENDIF .
 
-    t_lognumber = VALUE bal_t_logn( ( '00000000000411051200' ) ) .
-    t_lognumber = log_numbers .
+    DATA(log_range) = VALUE bal_r_logn(
+      FOR r IN log_numbers (
+        sign   = if_fsbp_const_range=>sign_include
+        option = if_fsbp_const_range=>option_equal
+        low    = r
+      )
+    ).
 
-*    call function 'BAL_FILTER_CREATE'
-*      exporting
-**       i_object       = object
-**       i_subobject    = subobject
-**       i_extnumber    = '00qwPT6L7jgsjQu6zl7SuW'
-**       i_aldate_from  = sy-datum
-**       i_aldate_to    = sy-datum
-**       i_altime_from  = i_altime_from
-**       i_altime_to    = i_altime_to
-**       i_probclass_from = i_probclass_from
-**       i_probclass_to = i_probclass_to
-**       i_alprog       = i_alprog
-**       i_altcode      = i_altcode
-**       i_aluser       = i_aluser
-**       i_almode       = i_almode
-*        i_t_lognumber  = t_lognumber
-*      importing
-*        e_s_log_filter = e_s_log_filter.
-*
-**if ( handle is initial ) .
-**e_s_log_filter =
-**  value #( log_handle ( handle ) ) ) .
-**ENDIF .
-**
-**E_S_LOG_FILTER-LOG_HANDLE[1]-LOW
-*
-*    call function 'BAL_DB_SEARCH'
-*      exporting
-**       i_client           = SY-MANDT
-*        i_s_log_filter     = e_s_log_filter
-**       i_t_sel_field      = i_t_sel_field
-**       i_tzone            = i_tzone
-*      importing
-*        e_t_log_header     = l_t_log_header
-*      exceptions
-*        log_not_found      = 1
-*        no_filter_criteria = 2
-*        others             = 3.
-*    if sy-subrc <> 0.
-*    endif.
+    DATA(log_filter) = VALUE bal_s_lfil(
+      lognumber = log_range
+    ).
 
+    " Search on DB for these logs
+    CALL FUNCTION 'BAL_DB_SEARCH'
+      EXPORTING
+        i_s_log_filter = log_filter
+      IMPORTING
+        e_t_log_header = g_t_log_header
+      EXCEPTIONS
+        OTHERS         = 0.
+    IF ( sy-subrc NE 0 ) .
+      RETURN .
+    ENDIF .
 
+    " load logs from DB
+    CALL FUNCTION 'BAL_DB_LOAD'
+      EXPORTING
+        i_t_log_header = g_t_log_header
+      EXCEPTIONS
+        OTHERS         = 0.
+    IF ( sy-subrc NE 0 ) .
+      RETURN .
+    ENDIF .
 
-    DATA:
-      lt_lognumbers  TYPE szal_lognumbers,
-      lt_header_data TYPE TABLE OF balhdr.
-
-*    IF ( iv_lognumber IS NOT INITIAL ) .
-*      lt_lognumbers = VALUE #( ( item = iv_lognumber ) ) .
-*    ELSE .
-*      lt_lognumbers = VALUE #( ( item = '00000000000411051200' ) ) .
-*    ENDIF .
-
-    lt_lognumbers = log_numbers .
-
-    CALL FUNCTION 'APPL_LOG_READ_DB_WITH_LOGNO'
-*      exporting
-*        put_into_memory    = SPACE
-*      importing
-*        number_of_logs     =
-      TABLES
-        lognumbers  = lt_lognumbers
-        header_data = lt_header_data
-*       header_parameters  =
-*       messages    =
-*       message_parameters =
-*       contexts    =
-*       t_exceptions       =
-      .
-
-    l_t_log_handle = VALUE #( ( lt_header_data[ 1 ]-log_handle ) ) .
-
-*
-*    clear l_t_log_handle.
-*    "loop at l_t_log_header assigning field-symbol(<l_s_log_header>) .
-*    loop at lt_header_data assigning field-symbol(<l_s_log_header>) .
-*      call function 'BAL_LOG_EXIST'
-*        exporting
-*          i_log_handle  = <l_s_log_header>-log_handle
-*        exceptions
-*          log_not_found = 1.
-*      if sy-subrc = 0.
-*        insert <l_s_log_header>-log_handle into table l_t_log_handle.
-*        delete l_t_log_header.
-*      endif.
-*    endloop.
-*
-*
-*    call function 'BAL_DB_LOAD'
-*      exporting
-*        i_t_log_header         = l_t_log_header
-*        i_do_not_load_messages = read_from_db_hdr
-*        i_lock_handling        = 1
-*      importing
-*        e_t_log_handle         = l_t_log_loaded
-*        e_t_locked             = l_t_locked
-*      exceptions
-*        others                 = 0.
-*    insert lines of l_t_log_loaded into table l_t_log_handle.
-*
-*    describe table l_t_locked lines sy-tfill.
-*    if sy-tfill > 0.
-*      message s263(bl) with sy-tfill.
-*    endif.
-
-    IF NOT i_s_display_profile IS INITIAL.
-      l_s_display_profile = i_s_display_profile.
-    ELSE.
-
-
-*      IF number_of_protocols = 1.
-*        CALL FUNCTION 'BAL_DSP_PROFILE_SINGLE_LOG_GET'
-*          IMPORTING
-*            e_s_display_profile = l_s_display_profile
-*          EXCEPTIONS
-*            OTHERS              = 0.
-*      ELSE.
-*        CALL FUNCTION 'BAL_DSP_PROFILE_STANDARD_GET'
-*          IMPORTING
-*            e_s_display_profile = l_s_display_profile
-*          EXCEPTIONS
-*            OTHERS              = 0.
-*      ENDIF.
-
-      CASE option .
-        WHEN 0 .
-          CALL FUNCTION 'BAL_DSP_PROFILE_POPUP_GET'
-            IMPORTING
-              e_s_display_profile = l_s_display_profile
-            EXCEPTIONS
-              OTHERS              = 0.
-        WHEN 1 .
-          CALL FUNCTION 'BAL_DSP_PROFILE_STANDARD_GET'
-            IMPORTING
-              e_s_display_profile = l_s_display_profile
-            EXCEPTIONS
-              OTHERS              = 0.
-        WHEN 2 .
-          CALL FUNCTION 'BAL_DSP_PROFILE_SINGLE_LOG_GET'
-            IMPORTING
-              e_s_display_profile = l_s_display_profile
-            EXCEPTIONS
-              OTHERS              = 0.
-        WHEN 3 .
-        WHEN OTHERS .
-      ENDCASE .
-    ENDIF.
-
+    DATA(display_profile) = VALUE bal_s_prof(
+      disvariant = VALUE disvariant(
+                     report     = sy-repid
+                     handle = 'LOG'
+                   )
+    ).
 
     CALL FUNCTION 'BAL_DSP_LOG_DISPLAY'
       EXPORTING
-        i_t_log_handle      = l_t_log_handle
-        i_s_display_profile = l_s_display_profile
-        i_srt_by_timstmp    = i_srt_by_timstmp
-      EXCEPTIONS
-        no_authority        = 1
-        OTHERS              = 2.
-    IF sy-subrc <> 0.
-    ENDIF.
+        i_s_display_profile = display_profile.
 
   ENDMETHOD.
 
@@ -504,92 +310,7 @@ CLASS ycl_hcm_application_log IMPLEMENTATION.
   ENDMETHOD .
 
 
-  METHOD get_handle_saved .
-
-    DATA:
-      lt_lognumbers  TYPE szal_lognumbers,
-      lt_header_data TYPE TABLE OF balhdr.
-
-    CLEAR result .
-
-    IF ( iv_lognumber IS NOT INITIAL ) .
-
-      lt_lognumbers = VALUE #( ( item = iv_lognumber ) ) .
-
-      CALL FUNCTION 'APPL_LOG_READ_DB_WITH_LOGNO'
-*        exporting
-*          put_into_memory    = SPACE
-*        importing
-*          number_of_logs     =
-        TABLES
-          lognumbers  = lt_lognumbers
-          header_data = lt_header_data
-*         header_parameters  =
-*         messages    =
-*         message_parameters =
-*         contexts    =
-*         t_exceptions       =
-        .
-
-      IF ( lines( lt_header_data ) GT 0 ) .
-
-        result = VALUE #( lt_header_data[ 1 ]-log_handle OPTIONAL ) .
-
-*        " Informando dados do log ja criado
-*        me->gv_object    = value #( lt_header_data[ 1 ]-object optional ) .
-*        me->gv_subobject = value #( lt_header_data[ 1 ]-subobject optional ) .
-*        me->gv_handle    = value #( lt_header_data[ 1 ]-log_handle optional ) .
-*        me->gv_alprog    = sy-cprog .
-
-      ENDIF .
-
-    ENDIF .
-
-
-  ENDMETHOD .
-
-
-  METHOD get_messages_saved .
-
-    DATA:
-      lt_lognumbers  TYPE szal_lognumbers,
-      lt_header_data TYPE TABLE OF balhdr,
-      lt_messages    TYPE emma_message_tab.
-
-    CLEAR:
-      result .
-
-    IF ( iv_lognumber IS NOT INITIAL ) .
-
-      lt_lognumbers = VALUE #( ( item = iv_lognumber ) ) .
-
-      CALL FUNCTION 'APPL_LOG_READ_DB_WITH_LOGNO'
-*        exporting
-*          put_into_memory    = SPACE
-*        importing
-*          number_of_logs     =
-        TABLES
-          lognumbers  = lt_lognumbers
-          header_data = lt_header_data
-*         header_parameters  =
-          messages    = lt_messages
-*         message_parameters =
-*         contexts    =
-*         t_exceptions       =
-        .
-
-      IF ( lines( lt_messages ) GT 0 ) .
-
-        result = lt_messages .
-
-      ENDIF .
-
-    ENDIF .
-
-  ENDMETHOD .
-
-
-  METHOD save_all .
+  METHOD save_single .
 
     IF ( is_header IS INITIAL ) .
       RETURN .
@@ -606,31 +327,174 @@ CLASS ycl_hcm_application_log IMPLEMENTATION.
                                    iv_alprog    = is_header-alprog ) .
 
     IF ( lo_app IS BOUND ) .
-
       lo_app->add_bapiret1( is_message ) .
       lo_app->save( ) .
       result = lo_app->get_lognumber( ).
+    ENDIF .
+
+    FREE lo_app .
+
+  ENDMETHOD .
+
+
+  METHOD save_bapiret2_tab .
+
+    IF ( is_header IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    IF ( it_message IS INITIAL ) .
+      RETURN .
+    ENDIF.
+
+    DATA(lo_app) =
+      NEW ycl_hcm_application_log( iv_title     = is_header-title
+                                   iv_object    = is_header-object
+                                   iv_subobject = is_header-subobject
+                                   iv_alprog    = is_header-alprog ) .
+    IF ( lo_app IS BOUND ) .
+      LOOP AT it_message INTO DATA(ls_message) .
+        lo_app->add_bapiret2( ls_message ) .
+      ENDLOOP.
+      lo_app->save( ) .
+      result = lo_app->get_lognumber( ).
       FREE lo_app .
+    ENDIF .
+
+  ENDMETHOD .
+
+
+  METHOD get_log_bapiret2 .
+
+    DATA:
+      lognumbers_filter TYPE STANDARD TABLE OF szal_lognumber,
+      saved_messages    TYPE STANDARD TABLE OF balm.
+
+    IF ( is_log_number IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    lognumbers_filter = VALUE #( ( item = is_log_number ) ) .
+
+    CALL FUNCTION 'APPL_LOG_READ_DB_WITH_LOGNO'
+      TABLES
+        lognumbers = lognumbers_filter
+        messages   = saved_messages.
+
+    IF ( lines( saved_messages ) GT 0 ) .
+
+      result = VALUE bapiret2_t(
+        FOR l IN saved_messages (
+          type       = l-msgty
+          id         = l-msgid
+          number     = l-msgno
+          message_v1 = l-msgv1
+          message_v2 = l-msgv2
+          message_v3 = l-msgv3
+          message_v4 = l-msgv4
+      ) ) .
+
 
     ENDIF .
 
   ENDMETHOD .
 
 
+  METHOD map_excep_to_bapiret2 .
+
+    DATA:
+      lt_lines   TYPE trtexts,
+      ls_message TYPE bapiret2.
+
+    IF ( message IS INITIAL ) .
+      RETURN .
+    ENDIF .
+
+    CALL FUNCTION 'TR_SPLIT_TEXT'
+      EXPORTING
+        iv_text  = CONV char1250( message )
+        iv_len   = 50
+      IMPORTING
+        et_lines = lt_lines.
+
+    LOOP AT lt_lines INTO DATA(line) .
+
+      CASE sy-tabix MOD 4 .
+        WHEN 1 .
+          ls_message = VALUE #(
+*           type       = if_xo_const_message=>error
+            type       = type
+            id         = ycl_hcm_application_log=>message
+            number     = 000
+            message_v1 = line ) .
+        WHEN 2 .
+          ls_message-message_v2 = line .
+        WHEN 3 .
+          ls_message-message_v3 = line .
+        WHEN 0 .
+          ls_message-message_v4 = line .
+          APPEND ls_message TO result .
+          CLEAR  ls_message .
+      ENDCASE .
+
+    ENDLOOP.
+
+    IF ( ls_message IS NOT INITIAL ) .
+      APPEND ls_message TO result .
+    ENDIF.
+
+  ENDMETHOD .
+
+
+  METHOD save_imported .
+
+    IF ( gjahr IS INITIAL ) OR
+       ( id    IS INITIAL ) OR
+       ( lines( msg ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    DATA(log) =
+      VALUE ycl_hcm_application_log=>ty_header_log(
+        title     = |{ gjahr }.{ id }.{ pernr }|
+        object    = ty_log-object
+        subobject = ty_log-subobject
+        alprog    = ty_log-alprog
+      ) .
+
+    DATA(log_processed) =
+      ycl_hcm_application_log=>save_bapiret2_tab(
+        EXPORTING
+          is_header  = log
+          it_message = msg
+      ) .
+
+    DATA(table_log) = VALUE ythcm0002(
+      gjahr     = gjahr
+      id        = id
+      lognumber = log_processed
+      credat    = sy-datum
+      cretim    = sy-uzeit
+      crenam    = sy-uname
+    ).
+
+    MODIFY ythcm0002 FROM table_log .
+
+  ENDMETHOD .
+
 
   METHOD create.
 
     DATA(ls_log) = VALUE bal_s_log(
       extnumber  = me->gs_header-title
-      object     = me->gs_header-title
-      subobject  = me->gs_header-title
+      object     = me->gs_header-object
+      subobject  = me->gs_header-subobject
       aldate     = sy-datum
       altime     = sy-uzeit
       aluser     = sy-uname
       altcode    = sy-tcode
       alprog     = me->gs_header-alprog
-      del_before = abap_on
-    ) .
+      del_before = abap_on ) .
 
     CALL FUNCTION 'BAL_LOG_CREATE'
       EXPORTING
@@ -662,6 +526,22 @@ CLASS ycl_hcm_application_log IMPLEMENTATION.
   ENDMETHOD .
 
 
+  METHOD add .
+
+    IF ( me->gs_header-handle IS INITIAL ) .
+      RETURN.
+    ENDIF .
+
+    IF ( is_message IS INITIAL ) .
+      RETURN.
+    ENDIF .
+
+    CALL FUNCTION 'BAL_LOG_MSG_ADD'
+      EXPORTING
+        i_log_handle = me->gs_header-handle
+        i_s_msg      = is_message.
+
+  ENDMETHOD.
+
 
 ENDCLASS.
-

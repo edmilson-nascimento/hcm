@@ -28,6 +28,10 @@ CLASS ycl_hcm_elo_importation DEFINITION
       RETURNING
         VALUE(result) TYPE bapiret2_t .
 
+    CLASS-METHODS get_group_absence
+      RETURNING
+        VALUE(result) TYPE ptesa_subtype_selection .
+
   PROTECTED SECTION.
 
   PRIVATE SECTION.
@@ -55,6 +59,7 @@ CLASS ycl_hcm_elo_importation DEFINITION
       END OF message,
       company_code TYPE zemployee_filtering_criteria-company_code VALUE 'DESCONTAO'.
 
+
     DATA:
       "! <p class="shorttext synchronized" lang="pt">Armazena mensagens de processamento da classe</p>
       messages TYPE bapiret2_t,
@@ -68,6 +73,9 @@ CLASS ycl_hcm_elo_importation DEFINITION
     "! <p class="shorttext synchronized" lang="pt">Retorna critérios de seleção/dados de filtro da Interface</p>
     METHODS get_filtering_criteria
       RETURNING VALUE(result) TYPE zsalary_export_criteria .
+    "! <p class="shorttext synchronized" lang="pt">Retorna critérios de seleção/dados de filtro de Nr Pessoal</p>
+    METHODS get_employee_codes
+      RETURNING VALUE(result) TYPE zsalary_export_criteria-employee_codes .
     "! <p class="shorttext synchronized" lang="pt">Retorna dados de acesso (user,pass and etc)</p>
     METHODS get_user_access
       RETURNING VALUE(result) TYPE zwsuser .
@@ -114,6 +122,8 @@ CLASS ycl_hcm_elo_importation DEFINITION
         VALUE(result) TYPE ythcm0001-type.
     "! <p class="shorttext synchronized" lang="pt">Prepara os dados p/ persistência (ins, upd)</p>
     METHODS prepare_data .
+    "! <p class="shorttext synchronized" lang="pt">Prepara os dados agrupando Ausencia de dias</p>
+    METHODS group_absence .
     "! <p class="shorttext synchronized" lang="pt">Persiste os dados importados da interface</p>
     METHODS save_imported
       RETURNING
@@ -193,12 +203,13 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
         RETURN .
     ENDTRY .
 
+    " Caso não houveram dados para a data e infotipo requisitados
     IF ( lines( output-salary_time_info-salary_time ) EQ 0 ) .
       IF ( 0 EQ 1 ). MESSAGE i010(zhcm). ENDIF.
-      me->set_log( type   = if_xo_const_message=>error
+      me->set_log( type   = if_xo_const_message=>info
                    number = me->message-not_found ) .
-      IF ( 0 EQ 1 ). MESSAGE i010(zhcm). ENDIF.
-      me->set_log( type   = if_xo_const_message=>error
+      IF ( 0 EQ 1 ). MESSAGE i011(zhcm). ENDIF.
+      me->set_log( type   = if_xo_const_message=>warning
                    number = me->message-no_record ) .
       result = me->messages .
       RETURN .
@@ -215,6 +226,32 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
     me->messages = VALUE #( BASE me->messages ( LINES OF me->mainten_imported( ) ) ) .
 
     result = me->messages .
+
+  ENDMETHOD .
+
+
+  METHOD get_group_absence .
+
+
+    result = VALUE ptesa_subtype_selection(
+      ( '1000' ) " Férias Anuais
+      ( '1001' ) " Casamento
+      ( '1005' ) " Baixa Médica
+      ( '1006' ) " Licença pré-maternidade
+      ( '1007' ) " Licença Maternidade
+      ( '1008' ) " Nascimento de filho (Pai)
+      ( '1011' ) " Assistência Familiar Dias
+      ( '1019' ) " Falta dispensa serviço - D
+      ( '1024' ) " Just C/ Remuneração D
+      ( '1026' ) " Just S/ Remuneração D
+      ( '1030' ) " Provas escolares D
+      ( '1032' ) " Obrigaçao Legal/mIlitar D
+      ( '1035' ) " Ativ. Sindicais D
+      ( '1037' ) " Ativ Culturais D
+      ( '1041' ) " Licença sem vencimento
+    ) .
+
+    SORT result .
 
   ENDMETHOD .
 
@@ -341,6 +378,20 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
       start_date                     = start_date
       target_type                    = 'Any'
       additional_fields              = additional_fields
+    ).
+
+  ENDMETHOD .
+
+
+  METHOD get_employee_codes .
+
+    IF ( lines( me->filter-pernr ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    result-string = VALUE #(
+      FOR p IN me->filter-pernr
+      ( |{ p ALPHA = OUT }| )
     ).
 
   ENDMETHOD .
@@ -624,7 +675,7 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
 
           log = ycl_hcm_elo_maintenance=>mainten_2002_imported(
                   EXPORTING
-                    header       = local_header
+                    header        = local_header
                     imported_type = local_imported
                 ).
 
@@ -642,14 +693,21 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
               ex_imported = local_imported
           ).
 
+          " Verifica colisão
+          ycl_hcm_elo_maintenance=>check_2010_imported(
+            CHANGING ch_header        = local_header
+                     ch_imported_type = local_imported
+                     ch_log           = log ) .
+
           IF ( lines( local_header ) EQ 0 ) OR
              ( lines( local_imported ) EQ 0 ) .
+            result = VALUE #( BASE result ( LINES OF log ) ) .
             CONTINUE .
           ENDIF .
 
           log = ycl_hcm_elo_maintenance=>mainten_2010_imported(
                   EXPORTING
-                    header       = local_header
+                    header        = local_header
                     imported_type = local_imported
                 ).
 
@@ -814,124 +872,102 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
       RETURN .
     ENDIF .
 
-    " 1. Buscar dados salvos
-    " 2. Verificar se ja existe correspondencio para o registro baseando nos campos
-    " YTHCM0003-CODE_TYPE       Tipo de segmento
-    " YTHCM0003-EMPLOYEE_CODE   Nº pessoal
-    " YTHCM0003-SALARY_CODE     Tipo de registro
-    " YTHCM0003-START_DATE_TIME Data (e hora se aplicável) de início do registo
-    " 3. Modificar registros existentes (atualizar 'change by/change on')
-    " 4. Informar numeros de ID para novos registros
-
-    " 1. Buscar dados salvos
-    SELECT *
-      FROM ythcm0003
-       FOR ALL ENTRIES IN @me->imported
-     WHERE code_type       EQ @me->imported-code_type
-       AND employee_code   EQ @me->imported-employee_code
-       AND salary_code     EQ @me->imported-salary_code
-       AND start_date_time EQ @me->imported-start_date_time " Pode ser alterado conforme def.
-      INTO TABLE @DATA(saved_data) .
+    " Agrupar ausencias que tem o "Dia Completo" marcado
+    me->group_absence( ) .
+    IF ( lines( me->imported ) EQ 0 ) .
+      RETURN .
+    ENDIF .
 
     LOOP AT me->imported ASSIGNING FIELD-SYMBOL(<imported>) .
-
-      " 2. Verificar se ja existe correspondencio para o registro baseando nos campos
-      ASSIGN saved_data[ code_type       = <imported>-code_type
-                         employee_code   = <imported>-employee_code
-                         salary_code     = <imported>-salary_code
-                         start_date_time = <imported>-start_date_time ]
-          TO FIELD-SYMBOL(<saved>) .
-
-      IF ( <saved> IS ASSIGNED ) .
-
-        " Criando o registro de forma que, os dados sejam atualizados de acordo
-        " com o que foi alterado e atualizando as datas de criação/atualizacao
-        DATA(imported_prepared) = VALUE ythcm0003(
-          mandt           = <saved>-mandt
-          gjahr           = <saved>-gjahr
-          id              = <saved>-id
-          code_in_hours   = <imported>-code_in_hours
-          code_type       = <imported>-code_type
-          duration        = <imported>-duration
-          employee_code   = <imported>-employee_code
-          end_date_time   = <imported>-end_date_time
-          end_date        = <imported>-end_date
-          end_time        = <imported>-end_time
-          number_of_days  = <imported>-number_of_days
-          salary_code     = <imported>-salary_code
-          start_date_time = <imported>-start_date_time
-          start_date      = <imported>-start_date
-          start_time      = <imported>-start_time
-          tpsituacao      = <imported>-tpsituacao
-*         credat          = <saved>-credat
-*         cretim          = <saved>-cretim
-*         crenam          = <saved>-crenam
-          credat          = sy-datum
-          cretim          = sy-uzeit
-          crenam          = sy-uname
-*         chadat          = <imported>-credat
-*         chatim          = <imported>-cretim
-*         chanam          = <imported>-crenam
-*         chadat          = sy-datum
-*         chatim          = sy-uzeit
-*         chanam          = sy-uname
-        ).
-
-        " Atualizar tambem os dados de Header
-        ASSIGN me->header[ gjahr = <imported>-gjahr
-                           id    = <imported>-id ] TO FIELD-SYMBOL(<header>) .
-        IF ( <header> IS ASSIGNED ) .
-
-          DATA(header_prepared) =  VALUE ythcm0001(
-            mandt   = <saved>-mandt
-            gjahr   = <saved>-gjahr
-            id      = <saved>-id
-            bukrs   = <header>-bukrs
-            pernr   = <header>-pernr
-            direct  = <header>-direct
-            type    = <header>-type
-            subtype = <header>-subtype
-            status  = <header>-status
-            credat  = sy-datum
-            cretim  = sy-uzeit
-            crenam  = sy-uname
-*            credat  = <header>-credat
-*            cretim  = <header>-chatim
-*            crenam  = <header>-crenam
-**           chadat  = <imported>-credat
-**           chatim  = <imported>-cretim
-**           chanam  = <imported>-crenam
-*            chadat  = sy-datum
-*            chatim  = sy-uzeit
-*            chanam  = sy-uname
-          ).
-
-          <header> = header_prepared .
-          UNASSIGN <header> .
-
-        ENDIF .
-
-        " 3. Modificar registros existentes (atualizar 'change by/change on')
-        <imported> = imported_prepared .
-        UNASSIGN <saved> .
-
-      ELSE .
-
-        " Quando nao existe registro correspondente no banco de dados
-        ASSIGN me->header[ id = <imported>-id ]
-           TO <header> .
-        IF ( <header> IS ASSIGNED ) .
-          " Atribuindo novo ID para novos registros
-          <header>-id   =
-          <imported>-id = me->get_id( <imported>-gjahr ) .
-          UNASSIGN <header> .
-        ENDIF .
-
+      ASSIGN me->header[ id = <imported>-id ] TO FIELD-SYMBOL(<header>) .
+      IF ( <header> IS ASSIGNED ) .
+        " Atribuindo novo ID para novos registros
+        <header>-id   =
+        <imported>-id = me->get_id( <imported>-gjahr ) .
+        UNASSIGN <header> .
       ENDIF .
-
     ENDLOOP .
 
   ENDMETHOD.
+
+
+  METHOD group_absence .
+
+    CONSTANTS:
+      BEGIN OF lc_tpsituacao,
+        dia_completo TYPE ythcm0003-tpsituacao VALUE '1',
+      END OF lc_tpsituacao .
+
+
+    DATA(lt_ausencias) = get_group_absence( ) .
+
+    IF ( lines( me->imported ) EQ 0 ) .
+      RETURN .
+    ENDIF .
+
+    " Criando uma tabel temporaria para verificar os itens e agrupamentos
+    DATA(lt_imported_temp) = me->imported .
+    CLEAR me->imported .
+
+    " Deve-se ter uma data inicial e final ordenadas para correto funcionamento
+    SORT lt_imported_temp ASCENDING BY employee_code salary_code start_date end_date .
+
+    LOOP AT lt_imported_temp INTO DATA(ls_temp) .
+
+      " Verificando se deve ser desconsiderado todo o dia
+      IF ( NOT line_exists( lt_ausencias[ table_line = ls_temp-salary_code ] ) ) .
+        APPEND ls_temp TO me->imported .
+        CONTINUE .
+      ENDIF .
+
+      " Verificando se o registro esta marcado para todo o dia
+      IF ( ls_temp-tpsituacao NE lc_tpsituacao-dia_completo ) .
+        APPEND ls_temp TO me->imported .
+        CONTINUE .
+      ENDIF .
+
+      " Verificando se ja existe um registro para esse item
+      ASSIGN me->imported[ employee_code = ls_temp-employee_code
+                           salary_code   = ls_temp-salary_code ]
+      TO FIELD-SYMBOL(<fs_imported>) .
+      IF ( <fs_imported> IS NOT ASSIGNED ) .
+        " Caso não encontre, possivelmente é o primeiro registro do intervalo de data
+        APPEND ls_temp TO me->imported .
+        CONTINUE .
+      ENDIF .
+
+      " Se a data final for diferente, seria outro dia e deve somar o contador de dia
+*     <fs_imported>-dia_completo = <fs_imported>-dia_completo + ls_temp-dia_completo .
+
+*      " Verificando se o intervalo é superior a um dia
+*      IF ( ( ls_temp-end_date - <fs_imported>-end_date ) GT 1 ) .
+*        APPEND ls_temp TO me->imported .
+*        CONTINUE .
+*      ENDIF .
+
+      " O registro ja existe, então, sera apenas atualizado a data final do evento
+      <fs_imported>-end_date      = ls_temp-end_date .
+      <fs_imported>-end_time      = ls_temp-end_time .
+      <fs_imported>-end_date_time = ls_temp-end_date_time .
+      UNASSIGN <fs_imported> .
+
+    ENDLOOP .
+
+
+    "  Atualizando dados de header
+    DATA(lt_header) = me->header .
+    CLEAR me->header .
+
+    LOOP AT me->imported INTO DATA(ls_imported) .
+      ASSIGN lt_header[ id = ls_imported-id ] TO FIELD-SYMBOL(<header>) .
+      IF ( <header> IS ASSIGNED ) .
+        APPEND <header> TO me->header .
+        UNASSIGN <header> .
+      ENDIF .
+    ENDLOOP .
+
+
+  ENDMETHOD .
 
 
   METHOD save_imported .
@@ -943,15 +979,6 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
     IF ( lines( me->imported ) EQ 0 ) .
       RETURN .
     ENDIF .
-
-    " ZHCM 022 Erro ao salvar dados importados da Inteface.
-    IF ( 0 EQ 1 ). MESSAGE i022(zhcm). ENDIF .
-    result = VALUE #(
-      ( type       = if_xo_const_message=>error
-        id         = ycl_hcm_application_log=>message-id
-        number     = me->message-save_error
-      )
-    ).
 
     MODIFY ythcm0001 FROM TABLE me->header .
     IF ( sy-subrc EQ 0 ) .
@@ -967,10 +994,12 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
           ( type       = if_xo_const_message=>success
             id         = ycl_hcm_application_log=>message-id
             number     = me->message-imported_successfully
+            row        = 1
           )
           ( type       = if_xo_const_message=>success
             id         = ycl_hcm_application_log=>message-id
-            number     = me->message-save_error
+            number     = me->message-save_success
+            row        = 2
           )
         ).
 
@@ -1003,10 +1032,10 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
         code_type       TYPE zsalary_time-code_type,
         duration        TYPE zsalary_time-duration,
         employee_code   TYPE zsalary_time-employee_code,
+        start_date_time TYPE zsalary_time-start_date_time,
         end_date_time   TYPE zsalary_time-end_date_time,
         number_of_days  TYPE zsalary_time-number_of_days,
         salary_code     TYPE zsalary_time-salary_code,
-        start_date_time TYPE zsalary_time-start_date_time,
         tpsituacao      TYPE ythcm0003-tpsituacao,
       END OF ty_result,
       tab_result TYPE STANDARD TABLE OF ty_result
@@ -1028,6 +1057,7 @@ CLASS ycl_hcm_elo_importation IMPLEMENTATION.
       result = 'Erro ao criar proxy.' .
       RETURN .
     ENDIF.
+
 
     IF ( start IS INITIAL ) .
       RETURN .
